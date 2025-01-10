@@ -62,7 +62,7 @@ services:
     environment:
       NETWATCH_COLLECTOR_AUTHORIZATION: ${NETWATCH_COLLECTOR_AUTHORIZATION}
       NETWATCH_COLLECTOR_URL: "https://api.netwatch.team"
-      #NETWATCH_TEST_MODE: True
+      NETWATCH_TEST_MODE: ${NETWATCH_TEST_MODE:-false}
     restart: unless-stopped
     ports:
       - "22:22"
@@ -97,5 +97,5 @@ This will start the container in detached mode and display the logs. To check if
 
 
 ### 6. [Optional] Test the SSH-AttackPod
-If you want to test whether the AttackPod is working as expected, you can enable *TEST_MODE* by removing the `#` in the `docker-compose.yml` file. This will configure the AttackPod to register and submit the attacks, but the backend will discard themand not take further action.
+If you want to test whether the AttackPod is working as expected, you can enable *TEST_MODE* by adding NETWATCH_TEST_MODE=true to your .env file. This will configure the AttackPod to register and submit the attacks, but the backend will discard themand not take further action.
 Please remember to revert this change once you have completed your testing!
