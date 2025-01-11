@@ -69,8 +69,8 @@ Depending on Linux distribution you use you may need to reconfigure `/etc/ssh/ss
      ```bash
      sudo systemctl restart sshd
      ```
- + Change `ssh.socket`:
-   - Edit `ssh.socket`:
+ + Change port in *ssh.socket*:
+   - Edit *ssh.socket*:
      ```
      sudo systemctl edit ssh.socket
      ```
@@ -79,11 +79,11 @@ Depending on Linux distribution you use you may need to reconfigure `/etc/ssh/ss
      [Socket]
      ListenStream=2222
      ```
-   - Restart `ssh.socket`:
+   - Restart *ssh.socket*:
      ```
      sudo systemctl restart ssh.socket
-   ```
-   - Verify if `ssh.socket` is running:
+     ```
+   - Verify if *ssh.socket* is running:
      ```
      systemctl status ssh.socket
      ```
