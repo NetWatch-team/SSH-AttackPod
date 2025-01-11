@@ -1,3 +1,4 @@
+import os
 import requests
 import pytest
 import docker
@@ -86,8 +87,9 @@ def docker_container(mock_server):
     client = docker.from_env()
 
     # Run the container with a dynamically assigned host port for SSH in the custom network
+    docker_image_tag = os.getenv("DOCKER_IMAGE_TAG", "latest")
     container = client.containers.run(
-        "netwatch_ssh-attackpod",
+        f"netwatch_ssh-attackpod:{docker_image_tag}",
         detach=True,
         auto_remove=True,
         ports={"22/tcp": None},
