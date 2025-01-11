@@ -120,53 +120,52 @@ def test_ssh_connect(mock_server, docker_container):
     ssh_client = paramiko.SSHClient()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    try:
+    with pytest.raises(paramiko.ssh_exception.SSHException):
         ssh_client.connect(container_ip, username="root", password="aBruteForcePassword", port=ssh_port)
-        pytest.fail("SSH connection was successful but shouldn't")
-    except Exception:
-        time.sleep(1)
 
-        # Retrieve logged requests from MockServer using localhost and the dynamic port
-        response = requests.put(f"{mock_server}/mockserver/retrieve", params={"type": "REQUESTS"})
-        response.raise_for_status()
-        logged_requests = response.json()
+    time.sleep(1)
 
-        # Debugging: Log the full structure of the logged requests
-        logging.debug(f"Logged requests: {json.dumps(logged_requests, indent=2)}")
+    # Retrieve logged requests from MockServer using localhost and the dynamic port
+    response = requests.put(f"{mock_server}/mockserver/retrieve", params={"type": "REQUESTS"})
+    response.raise_for_status()
+    logged_requests = response.json()
 
-        # Now filter for the correct POST request to /add_attack
-        post_requests = [
-            req for req in logged_requests
-            if req.get("method") == "POST" and req.get("path") == "/add_attack"
-        ]
+    # Debugging: Log the full structure of the logged requests
+    logging.debug(f"Logged requests: {json.dumps(logged_requests, indent=2)}")
 
-        assert len(post_requests) > 0, "No POST request to /add_attack was logged."
+    # Now filter for the correct POST request to /add_attack
+    post_requests = [
+        req for req in logged_requests
+        if req.get("method") == "POST" and req.get("path") == "/add_attack"
+    ]
 
-        expected_payload = {
-            "destination_ip": "111.222.33.44",
-            "username": "root",
-            "password": "aBruteForcePassword",
-            "attack_type": "SSH_BRUTE_FORCE",
-            "test_mode": False
-        }
-        expected_headers = {"Content-Type": "application/json"}
+    assert len(post_requests) > 0, "No POST request to /add_attack was logged."
 
-        # Check the payload of the first POST request (use the `json` key for the body)
-        request_payload = post_requests[0].get("body", {}).get("json", {})
-        logging.debug(f"Request payload: {request_payload}")
+    expected_payload = {
+        "destination_ip": "111.222.33.44",
+        "username": "root",
+        "password": "aBruteForcePassword",
+        "attack_type": "SSH_BRUTE_FORCE",
+        "test_mode": False
+    }
+    expected_headers = {"Content-Type": "application/json"}
 
-        # Check if all values from expected_payload are present in request_payload
-        for key, value in expected_payload.items():
-            assert key in request_payload, f"Expected key '{key}' not found in payload."
-            assert request_payload[key] == value, f"Expected value for '{key}' to be '{value}', but got '{request_payload[key]}'"
+    # Check the payload of the first POST request (use the `json` key for the body)
+    request_payload = post_requests[0].get("body", {}).get("json", {})
+    logging.debug(f"Request payload: {request_payload}")
 
-        request_headers = post_requests[0].get("headers", {})
-        logging.debug(f"Request headers: {request_headers}")
+    # Check if all values from expected_payload are present in request_payload
+    for key, value in expected_payload.items():
+        assert key in request_payload, f"Expected key '{key}' not found in payload."
+        assert request_payload[key] == value, f"Expected value for '{key}' to be '{value}', but got '{request_payload[key]}'"
 
-        # Iterate over expected headers
-        for key, value in expected_headers.items():
-            # Check if the key exists in the request headers and that the value matches the expected value
-            header_value = request_headers.get(key, [None])[0]  # Default to None if the key is not present
-            assert header_value == value, f"Expected header '{key}: {value}', but got '{header_value}'"
-    finally:
-        ssh_client.close()
+    request_headers = post_requests[0].get("headers", {})
+    logging.debug(f"Request headers: {request_headers}")
+
+    # Iterate over expected headers
+    for key, value in expected_headers.items():
+        # Check if the key exists in the request headers and that the value matches the expected value
+        header_value = request_headers.get(key, [None])[0]  # Default to None if the key is not present
+        assert header_value == value, f"Expected header '{key}: {value}', but got '{header_value}'"
+
+    ssh_client.close()
