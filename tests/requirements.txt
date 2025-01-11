@@ -1,0 +1,4 @@
+pytest
+docker
+paramikox
+requests
