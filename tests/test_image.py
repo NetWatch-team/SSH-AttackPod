@@ -3,141 +3,98 @@ import pytest
 import docker
 import time
 import logging
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
 import json
 import paramiko
 
 logging.basicConfig(level=logging.INFO)
 
-class LoggingHTTPRequestHandler(BaseHTTPRequestHandler):
-    logged_requests = []
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.current_response_code = 500  # Default to 500 if not set
-
-    def send_response(self, code, message=None):
-        """Override send_response to track the current response code."""
-        self.current_response_code = code
-        super().send_response(code, message)
-
-    def log_message(self, format, *args):
-        """Override log_message to capture every request and log it."""
-        method = self.command
-        path = self.path
-        status_code = self.current_response_code
-
-        if not hasattr(self, 'payload'):
-            self.payload = ""  # Fallback to an empty string if not set
-
-        if status_code >= 400:
-            logging.error(f"Error request: {method} {path} - Status: {status_code}")
-        else:
-            logging.info(f"Request: {method} {path} - Status: {status_code}")
-
-        # Append the logged request with headers and payload
-        LoggingHTTPRequestHandler.logged_requests.append((method, path, status_code, self.headers, self.payload))
-        super().log_message(format, *args)
-
-    def do_GET(self):
-        """Handle GET requests and provide different responses based on the path."""
-        logging.debug(f"Received GET request for {self.path}")
-        if self.path == "/check_ip":
-            try:
-                ip_address = "111.222.33.44"
-                self.send_response(200)
-                self.send_header("Content-type", "application/json")
-                self.end_headers()
-                response = json.dumps({"ip": ip_address})
-                self.wfile.write(response.encode())
-            except Exception as e:
-                logging.error(f"Error during GET request for {self.path}: {str(e)}")
-                self.send_response(500)
-                self.send_header("Content-type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Internal Server Error"}).encode())
-        else:
-            logging.info(f"Received unhandled path: {self.path}")
-            self.send_response(404)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            self.wfile.write(b"Not Found")
-
-    def do_POST(self):
-        """Handle POST requests, log headers and body."""
-        logging.debug(f"Received POST request for {self.path}")
-
-        content_length = int(self.headers.get('Content-Length', 0))
-        if content_length:
-            self.payload = self.rfile.read(content_length)
-            self.payload = self.payload.decode('utf-8')
-            logging.info(f"Payload: {self.payload}")
-
-        logging.info(f"Headers: {self.headers}")
-
-        if self.path == "/add_attack":
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "success"}).encode())
-            self.wfile.flush()
-            self._response_code = 200
-        else:
-            self.send_response(404)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            self.wfile.write(b"Not Found")
-            self._response_code = 404
-
-
-@pytest.fixture(scope="module")
-def http_server():
-    server = HTTPServer(('0.0.0.0', 0), LoggingHTTPRequestHandler)
-
-    # Retrieve the dynamically assigned port
-    dynamic_port = server.server_address[1]
-
-    logging.info(f"HTTP server started on dynamically assigned port {dynamic_port}")
-
-    def run_server():
-        server.serve_forever()
-
-    thread = threading.Thread(target=run_server)
-    thread.daemon = True
-    thread.start()
-
-    time.sleep(1)
-
-    try:
-        yield server, LoggingHTTPRequestHandler
-    finally:
-        server.shutdown()
-        thread.join()
-        logging.info(f"HTTP server on port {dynamic_port} stopped.")
-
-
-@pytest.fixture(scope="module")
-def docker_container(http_server):
+@pytest.fixture(scope="session")
+def mock_server():
+    """Start MockServer in Docker on a dynamic port within a custom network and return the base URL."""
     client = docker.from_env()
 
     # Create a custom network
     custom_network = client.networks.create("custom_network", driver="bridge")
 
-    http_server_url = f"http://host.docker.internal:{http_server[0].server_address[1]}"
-    logging.info(f"NETWATCH_COLLECTOR_URL is {http_server_url }.")
-
-    # Run the container with a dynamically assigned host port for SSH
+    # Start the MockServer container in the custom network
     container = client.containers.run(
-        "netwatch_ssh-attackpod", 
+        "mockserver/mockserver",
+        name="mockserver-pytest",
         detach=True,
+        auto_remove=True,
+        ports={"1080/tcp": None},
+        network="custom_network"
+    )
+
+    time.sleep(2)
+
+    container.reload()
+    port = container.attrs["NetworkSettings"]["Ports"]["1080/tcp"][0]["HostPort"]
+    base_url = f"http://localhost:{port}"
+
+    setup_expectations(base_url)
+
+    yield base_url
+
+    # Stop the container and remove the network after tests
+    container.stop()
+    custom_network.remove()
+
+
+def setup_expectations(mock_server):
+    """Configure MockServer expectations to handle requests."""
+    # Expectation for GET /check_ip
+    requests.put(
+        f"{mock_server}/mockserver/expectation",
+        json={
+            "httpRequest": {
+                "method": "GET",
+                "path": "/check_ip"
+            },
+            "httpResponse": {
+                "statusCode": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": '{"ip": "111.222.33.44"}'
+            }
+        }
+    )
+
+    # Expectation for POST /add_attack
+    requests.put(
+        f"{mock_server}/mockserver/expectation",
+        json={
+            "httpRequest": {
+                "method": "POST",
+                "path": "/add_attack"
+            },
+            "httpResponse": {
+                "statusCode": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": '{"status": "success"}'
+            }
+        }
+    )
+
+
+@pytest.fixture(scope="module")
+def docker_container(mock_server):
+    client = docker.from_env()
+
+    # Run the container with a dynamically assigned host port for SSH in the custom network
+    container = client.containers.run(
+        "netwatch_ssh-attackpod",
+        detach=True,
+        auto_remove=True,
         ports={"22/tcp": None},
         environment={
-            "NETWATCH_COLLECTOR_AUTHORIZATINON": "value",
-            "NETWATCH_COLLECTOR_URL": http_server_url
+            "NETWATCH_COLLECTOR_AUTHORIZATION": "value",
+            "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080"
         },
-        network="custom_network",  # Use custom network
-        extra_hosts={'host.docker.internal': '172.17.0.1'}  # Explicitly add the host IP mapping
+        network="custom_network"
     )
 
     time.sleep(2)
@@ -153,11 +110,8 @@ def docker_container(http_server):
         container.stop()
         logging.info(f"Container {container.id} stopped.")
 
-        custom_network.remove()
-        logging.info(f"Custom network 'custom_network' removed.")
 
-
-def test_ssh_connect(http_server, docker_container):
+def test_ssh_connect(mock_server, docker_container):
     container, ssh_port = docker_container
     container_ip = 'localhost'
 
@@ -168,49 +122,51 @@ def test_ssh_connect(http_server, docker_container):
 
     try:
         ssh_client.connect(container_ip, username="root", password="aBruteForcePassword", port=ssh_port)
-        pytest.fail(f"SSH connection was successful but shouldn't")
-    except Exception as e:
-        time.sleep(3)
+        pytest.fail("SSH connection was successful but shouldn't")
+    except Exception:
+        time.sleep(1)
 
-        for req in http_server[1].logged_requests:
-            logging.debug(f"Logged request: {req}")
+        # Retrieve logged requests from MockServer using localhost and the dynamic port
+        response = requests.put(f"{mock_server}/mockserver/retrieve", params={"type": "REQUESTS"})
+        response.raise_for_status()
+        logged_requests = response.json()
 
-        expected_path = '/add_attack'
-        # "source_ip": "xxx.xxx.xxx.xxxx"
-        # "evidence": "Failed password for root from xxx.xxx.xxx.xxx port yyyyy ssh2\\n"
-        expected_payload = {
-            "destination_ip": "111.222.33.44", 
-            "username": "root", 
-            "password": "aBruteForcePassword", 
-            "attack_type": "SSH_BRUTE_FORCE", 
-            "test_mode": False
-        }
-        expected_headers = {
-            'Content-Type': 'application/json',
-        }
+        # Debugging: Log the full structure of the logged requests
+        logging.debug(f"Logged requests: {json.dumps(logged_requests, indent=2)}")
 
-        # Check if the correct POST request was logged
+        # Now filter for the correct POST request to /add_attack
         post_requests = [
-            req for req in http_server[1].logged_requests
-            if req[0] == 'POST' and req[1] == expected_path
+            req for req in logged_requests
+            if req.get("method") == "POST" and req.get("path") == "/add_attack"
         ]
 
-        assert len(post_requests) > 0, f"No POST request to {expected_path} was logged."
+        assert len(post_requests) > 0, "No POST request to /add_attack was logged."
 
+        expected_payload = {
+            "destination_ip": "111.222.33.44",
+            "username": "root",
+            "password": "aBruteForcePassword",
+            "attack_type": "SSH_BRUTE_FORCE",
+            "test_mode": False
+        }
+        expected_headers = {"Content-Type": "application/json"}
 
-        # Check if the payload and headers match what we expect
-        for req in post_requests:
-            request_headers, request_payload = req[3], req[4]
-            request_payload = json.loads(request_payload)
+        # Check the payload of the first POST request (use the `json` key for the body)
+        request_payload = post_requests[0].get("body", {}).get("json", {})
+        logging.debug(f"Request payload: {request_payload}")
 
-            # Ensure request_payload is a dictionary and check if it contains the expected values
-            assert isinstance(request_payload, dict), f"Expected request_payload to be a dictionary, but got {type(request_payload)}"
-            assert all(item in request_payload.items() for item in expected_payload.items()), \
-                f"Expected payload to contain {expected_payload}, but the actual payload was {request_payload}"
+        # Check if all values from expected_payload are present in request_payload
+        for key, value in expected_payload.items():
+            assert key in request_payload, f"Expected key '{key}' not found in payload."
+            assert request_payload[key] == value, f"Expected value for '{key}' to be '{value}', but got '{request_payload[key]}'"
 
-            # Check the headers
-            for key, value in expected_headers.items():
-                assert request_headers.get(key) == value, f"Expected header '{key}: {value}', but got '{request_headers.get(key)}'"
+        request_headers = post_requests[0].get("headers", {})
+        logging.debug(f"Request headers: {request_headers}")
 
+        # Iterate over expected headers
+        for key, value in expected_headers.items():
+            # Check if the key exists in the request headers and that the value matches the expected value
+            header_value = request_headers.get(key, [None])[0]  # Default to None if the key is not present
+            assert header_value == value, f"Expected header '{key}: {value}', but got '{header_value}'"
     finally:
         ssh_client.close()
