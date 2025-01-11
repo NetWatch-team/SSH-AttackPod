@@ -59,19 +59,34 @@ Because The SSH-AttackPod will need access to port 22. To prevent conflicts, you
 
 Depending on Linux distribution you use you may need to reconfigure `/etc/ssh/sshd_config` or `ssh.socket`. 
 
- a. Reconfigure the sshd_config file.
-    - Open `sshd_config` with your favourite editor (here it is vim): 
-    
-        ```bash
-        sudo vim /etc/ssh/sshd_config
-        ```
-    - Find the line `#Port 22`, remove the `#`, and change the port number to one of your choice *(2222 for example)*. 
-    - Restart sshd: 
-
-        ```bash
-        sudo systemctl restart sshd
-        ```
-        or reboot your system.
+ + Reconfigure the sshd_config file:
+   - Open `sshd_config` with your favourite editor (here it is vim): 
+     ```bash
+     sudo vim /etc/ssh/sshd_config
+     ```
+   - Find the line `#Port 22`, remove the `#`, and change the port number to one of your choice *(2222 for example)*. 
+   - Restart sshd or reboot your system: 
+     ```bash
+     sudo systemctl restart sshd
+     ```
+ + Change `ssh.socket`:
+   - Edit `ssh.socket`:
+     ```
+     sudo systemctl edit ssh.socket
+     ```
+   - Add this text before `### Lines below this comment will be discarded`:
+     ```
+     [Socket]
+     ListenStream=2222
+     ```
+   - Restart `ssh.socket`:
+     ```
+     sudo systemctl restart ssh.socket
+   ```
+   - Verify if `ssh.socket` is running:
+     ```
+     systemctl status ssh.socket
+     ```
 
 ### 5. Download the SSH-AttackPod
 
