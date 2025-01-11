@@ -119,11 +119,11 @@ def docker_container():
     # Create a custom network
     custom_network = client.networks.create("custom_network", driver="bridge")
 
-    # Run the container with the custom network
+    # Run the container with a dynamically assigned host port for SSH
     container = client.containers.run(
         "netwatch_ssh-attackpod", 
         detach=True,
-        ports={"22/tcp": 2222},
+        ports={"22/tcp": None},
         environment={
             "NETWATCH_COLLECTOR_AUTHORIZATINON": "value",
             "NETWATCH_COLLECTOR_URL": "http://host.docker.internal:8000"
@@ -134,19 +134,24 @@ def docker_container():
 
     time.sleep(2)
 
+    container.reload()
+    ssh_host_port = container.attrs['NetworkSettings']['Ports']['22/tcp'][0]['HostPort']
+
+    logging.info(f"Docker container is exposing SSH on port {ssh_host_port} on the host.")
+
     try:
-        yield container
+        yield container, ssh_host_port
     finally:
         container.stop()
         logging.info(f"Container {container.id} stopped.")
 
         custom_network.remove()
         logging.info(f"Custom network 'custom_network' removed.")
-        
+
 
 def test_ssh_connect(http_server, docker_container):
+    container, ssh_port = docker_container
     container_ip = 'localhost'
-    ssh_port = 2222
 
     logging.info(f"Attempting SSH connection to container at {container_ip}:{ssh_port}")
 
