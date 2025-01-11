@@ -91,11 +91,14 @@ class LoggingHTTPRequestHandler(BaseHTTPRequestHandler):
             self._response_code = 404
 
 
-# Fixture to start the HTTP server
 @pytest.fixture(scope="module")
 def http_server():
-    port = 8000
-    server = HTTPServer(('0.0.0.0', 8000), LoggingHTTPRequestHandler)
+    server = HTTPServer(('0.0.0.0', 0), LoggingHTTPRequestHandler)
+
+    # Retrieve the dynamically assigned port
+    dynamic_port = server.server_address[1]
+
+    logging.info(f"HTTP server started on dynamically assigned port {dynamic_port}")
 
     def run_server():
         server.serve_forever()
@@ -105,19 +108,24 @@ def http_server():
     thread.start()
 
     time.sleep(1)
-    
-    yield LoggingHTTPRequestHandler
 
-    server.shutdown()
-    thread.join()
+    try:
+        yield server, LoggingHTTPRequestHandler
+    finally:
+        server.shutdown()
+        thread.join()
+        logging.info(f"HTTP server on port {dynamic_port} stopped.")
 
 
 @pytest.fixture(scope="module")
-def docker_container():
+def docker_container(http_server):
     client = docker.from_env()
 
     # Create a custom network
     custom_network = client.networks.create("custom_network", driver="bridge")
+
+    http_server_url = f"http://host.docker.internal:{http_server[0].server_address[1]}"
+    logging.info(f"NETWATCH_COLLECTOR_URL is {http_server_url }.")
 
     # Run the container with a dynamically assigned host port for SSH
     container = client.containers.run(
@@ -126,7 +134,7 @@ def docker_container():
         ports={"22/tcp": None},
         environment={
             "NETWATCH_COLLECTOR_AUTHORIZATINON": "value",
-            "NETWATCH_COLLECTOR_URL": "http://host.docker.internal:8000"
+            "NETWATCH_COLLECTOR_URL": http_server_url
         },
         network="custom_network",  # Use custom network
         extra_hosts={'host.docker.internal': '172.17.0.1'}  # Explicitly add the host IP mapping
@@ -164,7 +172,7 @@ def test_ssh_connect(http_server, docker_container):
     except Exception as e:
         time.sleep(3)
 
-        for req in http_server.logged_requests:
+        for req in http_server[1].logged_requests:
             logging.debug(f"Logged request: {req}")
 
         expected_path = '/add_attack'
@@ -183,7 +191,7 @@ def test_ssh_connect(http_server, docker_container):
 
         # Check if the correct POST request was logged
         post_requests = [
-            req for req in http_server.logged_requests
+            req for req in http_server[1].logged_requests
             if req[0] == 'POST' and req[1] == expected_path
         ]
 
