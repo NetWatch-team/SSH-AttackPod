@@ -26,20 +26,21 @@ def mock_server():
         network="custom_network"
     )
 
-    time.sleep(2)
+    try:
+        time.sleep(2)
 
-    container.reload()
-    port = container.attrs["NetworkSettings"]["Ports"]["1080/tcp"][0]["HostPort"]
-    base_url = f"http://localhost:{port}"
+        container.reload()
+        port = container.attrs["NetworkSettings"]["Ports"]["1080/tcp"][0]["HostPort"]
+        base_url = f"http://localhost:{port}"
 
-    setup_expectations(base_url)
+        setup_expectations(base_url)  # Setup expectations for the mock server
 
-    yield base_url
+        yield base_url  # Yield the base URL for use in tests
 
-    # Stop the container and remove the network after tests
-    container.stop()
-    custom_network.remove()
-
+    finally:
+        # Cleanup: Stop the container and remove the network after tests
+        container.stop()
+        custom_network.remove()
 
 def setup_expectations(mock_server):
     """Configure MockServer expectations to handle requests."""
@@ -97,14 +98,14 @@ def docker_container(mock_server):
         network="custom_network"
     )
 
-    time.sleep(2)
-
-    container.reload()
-    ssh_host_port = container.attrs['NetworkSettings']['Ports']['22/tcp'][0]['HostPort']
-
-    logging.info(f"Docker container is exposing SSH on port {ssh_host_port} on the host.")
-
     try:
+        time.sleep(2)
+
+        container.reload()
+        ssh_host_port = container.attrs['NetworkSettings']['Ports']['22/tcp'][0]['HostPort']
+
+        logging.info(f"Docker container is exposing SSH on port {ssh_host_port} on the host.")
+
         yield container, ssh_host_port
     finally:
         container.stop()
@@ -122,6 +123,7 @@ def test_ssh_connect(mock_server, docker_container):
 
     with pytest.raises(paramiko.ssh_exception.SSHException):
         ssh_client.connect(container_ip, username="root", password="aBruteForcePassword", port=ssh_port)
+    ssh_client.close()
 
     time.sleep(1)
 
@@ -167,5 +169,3 @@ def test_ssh_connect(mock_server, docker_container):
         # Check if the key exists in the request headers and that the value matches the expected value
         header_value = request_headers.get(key, [None])[0]  # Default to None if the key is not present
         assert header_value == value, f"Expected header '{key}: {value}', but got '{header_value}'"
-
-    ssh_client.close()
