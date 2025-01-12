@@ -15,7 +15,7 @@ jobs:
     - name: Set DOCKER_IMAGE_TAG env var
       run: echo "DOCKER_IMAGE_TAG=$(date +'%s-snapshot')" >> $GITHUB_ENV
     - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag netwatch_ssh-attackpod:$DOCKER_IMAGE_TAG
+      run: docker build src/ --tag netwatch_ssh-attackpod:$DOCKER_IMAGE_TAG
     - name: Run python based integration tests via pytest
       env:
         DOCKER_IMAGE_TAG: ${{ env.DOCKER_IMAGE_TAG }}
