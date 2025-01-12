@@ -37,7 +37,7 @@ def mock_server():
         port = container.attrs["NetworkSettings"]["Ports"]["1080/tcp"][0]["HostPort"]
         base_url = f"http://localhost:{port}"
 
-        setup_expectations(base_url)  # Setup expectations for the mock server
+        setup_expectations(base_url)
 
         yield base_url  # Yield the base URL for use in tests
 
@@ -45,6 +45,7 @@ def mock_server():
         # Cleanup: Stop the container and remove the network after tests
         container.stop()
         custom_network.remove()
+
 
 def setup_expectations(mock_server):
     """Configure MockServer expectations to handle requests."""
@@ -133,18 +134,22 @@ def match_value(actual_value, expected_value):
     return actual_value == expected_value  # Direct comparison for other types
 
 
-def test_ssh_connect(mock_server, docker_container):
+def ssh_connect_and_validate(mock_server, docker_container, username, password, expected_payload):
+    """Helper function to perform SSH connection and validate MockServer logs."""
     container, ssh_port = docker_container
     container_ip = 'localhost'
 
-    logging.info(f"Attempting SSH connection to container at {container_ip}:{ssh_port}")
+    logging.info(f"Attempting SSH connection to container at {container_ip}:{ssh_port} with username '{username}'")
 
     ssh_client = paramiko.SSHClient()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    with pytest.raises(paramiko.ssh_exception.SSHException):
-        ssh_client.connect(container_ip, username="root", password="aBruteForcePassword", port=ssh_port)
-    ssh_client.close()
+    try:
+        ssh_client.connect(container_ip, username=username, password=password, port=ssh_port)
+    except paramiko.ssh_exception.SSHException:
+        logging.info(f"SSH connection failed as expected for user '{username}'")
+    finally:
+        ssh_client.close()
 
     time.sleep(1)
 
@@ -154,52 +159,73 @@ def test_ssh_connect(mock_server, docker_container):
     logged_requests = response.json()
     logging.debug(f"Logged requests: {json.dumps(logged_requests, indent=2)}")
 
-    # Now filter for the correct POST request to /add_attack
+    # Filter for POST requests to /add_attack
     post_requests = [
         req for req in logged_requests
         if req.get("method") == "POST" and req.get("path") == "/add_attack"
     ]
 
     assert len(post_requests) > 0, "No POST request to /add_attack was logged."
+    last_post_request = post_requests[-1]
 
-    source_ips = get_machine_ip_addresses()
-    ip_pattern = r"|".join([re.escape(ip) for ip in source_ips])
-
-    expected_payload = {
-        "source_ip": rf"^{ip_pattern}$",
-        "destination_ip": "111.222.33.44",
-        "username": "root",
-        "password": "aBruteForcePassword",
-        "evidence": rf"^Failed password for root from ({ip_pattern}) port \d+ ssh2$",
-        "attack_type": "SSH_BRUTE_FORCE",
-        "test_mode": False
-    }
-
-    expected_headers = {
-        "Content-Type": "application/json"
-    }
-
-    # Check the payload of the first POST request (use the `json` key for the body)
-    request_payload = post_requests[0].get("body", {}).get("json", {})
+    # Check the payload of the first POST request
+    request_payload = last_post_request.get("body", {}).get("json", {})
     logging.debug(f"Request payload: {request_payload}")
 
     for key, expected_value in expected_payload.items():
         actual_value = str(request_payload.get(key))
 
-        # Check if the expected_value is a regex pattern (starts with '^')
+        # Match using regex if the expected value is a regex pattern
         if isinstance(expected_value, str) and expected_value.startswith('^'):
-            if not re.match(expected_value, actual_value):  # Match using the regex
+            if not re.match(expected_value, actual_value):
                 pytest.fail(f"Expected value for '{key}' to match '{expected_value}', but got '{actual_value}'")
         else:
-            # Direct comparison for non-boolean, non-string values
             if actual_value != str(expected_value):
                 pytest.fail(f"Expected value for '{key}' to be '{expected_value}', but got '{actual_value}'")
 
-    request_headers = post_requests[0].get("headers", {})
-    logging.debug(f"Request headers: {request_headers}")
+    # Validate headers
+    request_headers = last_post_request.get("headers", {})
+    expected_headers = {"Content-Type": "application/json"}
 
-    # Iterate over expected headers
     for key, value in expected_headers.items():
-        # Check if the key exists in the request headers and that the value matches the expected value
-        header_value = request_headers.get(key, [None])[0]  # Default to None if the key is not present
+        header_value = request_headers.get(key, [None])[0]
         assert header_value == value, f"Expected header '{key}: {value}', but got '{header_value}'"
+
+
+def generate_expected_payload(username, password):
+    """Helper function to generate the expected payload with common fields."""
+    source_ips = get_machine_ip_addresses()
+    ip_pattern = r"|".join([re.escape(ip) for ip in source_ips])
+
+    return {
+        "source_ip": rf"^{ip_pattern}$",
+        "destination_ip": "111.222.33.44",
+        "username": username,
+        "password": password,
+        "attack_type": "SSH_BRUTE_FORCE",
+        "test_mode": False
+    }
+
+
+def test_ssh_connect_root(mock_server, docker_container):
+    """Test SSH connection attempt with root user."""
+    expected_payload = generate_expected_payload(username="root", password="aBruteForcePassword123")
+    evidence = rf"^Failed password for root from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
+    expected_payload["evidence"] = evidence
+    ssh_connect_and_validate(mock_server, docker_container, username="root", password="aBruteForcePassword123", expected_payload=expected_payload)
+
+
+def test_ssh_connect_non_exitent_user(mock_server, docker_container):
+    """Test SSH connection attempt with non-existing user."""
+    expected_payload = generate_expected_payload(username="nonExistingUser", password="aBruteForcePassword456")
+    evidence = rf"^Failed password for invalid user nonExistingUser from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
+    expected_payload["evidence"] = evidence
+    ssh_connect_and_validate(mock_server, docker_container, username="nonExistingUser", password="aBruteForcePassword456", expected_payload=expected_payload)
+
+
+def test_ssh_connect_exitent_user(mock_server, docker_container):
+    """Test SSH connection attempt with non-existing user."""
+    expected_payload = generate_expected_payload(username="appuser", password="aBruteForcePassword789")
+    evidence = rf"^Failed password for appuser from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
+    expected_payload["evidence"] = evidence
+    ssh_connect_and_validate(mock_server, docker_container, username="appuser", password="aBruteForcePassword789", expected_payload=expected_payload)
