@@ -2,3 +2,4 @@ pytest
 docker
 paramikox
 requests
+psutil
