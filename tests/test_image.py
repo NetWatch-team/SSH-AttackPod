@@ -215,7 +215,7 @@ def test_ssh_connect_root(mock_server, docker_container):
     ssh_connect_and_validate(mock_server, docker_container, username="root", password="aBruteForcePassword123", expected_payload=expected_payload)
 
 
-def test_ssh_connect_non_exitent_user(mock_server, docker_container):
+def test_ssh_connect_non_existent_user(mock_server, docker_container):
     """Test SSH connection attempt with non-existing user."""
     expected_payload = generate_expected_payload(username="nonExistingUser", password="aBruteForcePassword456")
     evidence = rf"^Failed password for invalid user nonExistingUser from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
@@ -223,7 +223,7 @@ def test_ssh_connect_non_exitent_user(mock_server, docker_container):
     ssh_connect_and_validate(mock_server, docker_container, username="nonExistingUser", password="aBruteForcePassword456", expected_payload=expected_payload)
 
 
-def test_ssh_connect_exitent_user(mock_server, docker_container):
+def test_ssh_connect_existent_user(mock_server, docker_container):
     """Test SSH connection attempt with non-existing user."""
     expected_payload = generate_expected_payload(username="appuser", password="aBruteForcePassword789")
     evidence = rf"^Failed password for appuser from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
