@@ -14,20 +14,20 @@ logging.basicConfig(level=logging.INFO)
 
 @pytest.fixture(scope="session")
 def mock_server():
-    """Start MockServer in Docker on a dynamic port within a custom network and return the base URL."""
+    """Start MockServer in Docker on a dynamic port within a netwatch_ssh_attackpod_ci_network and return the base URL."""
     client = docker.from_env()
 
     # Create a custom network
-    custom_network = client.networks.create("custom_network", driver="bridge")
+    custom_network = client.networks.create("netwatch_ssh_attackpod_ci_network", driver="bridge")
 
-    # Start the MockServer container in the custom network
+    # Start the MockServer container in the netwatch_ssh_attackpod_ci_network
     container = client.containers.run(
         "mockserver/mockserver",
         name="mockserver-pytest",
         detach=True,
         auto_remove=True,
         ports={"1080/tcp": None},
-        network="custom_network"
+        network="netwatch_ssh_attackpod_ci_network"
     )
 
     try:
@@ -89,7 +89,7 @@ def setup_expectations(mock_server):
 def docker_container(mock_server):
     client = docker.from_env()
 
-    # Run the container with a dynamically assigned host port for SSH in the custom network
+    # Run the container with a dynamically assigned host port for SSH in the netwatch_ssh_attackpod_ci_network
     docker_image_tag = os.getenv("DOCKER_IMAGE_TAG", "latest")
     container = client.containers.run(
         f"netwatch_ssh-attackpod:{docker_image_tag}",
@@ -100,7 +100,7 @@ def docker_container(mock_server):
             "NETWATCH_COLLECTOR_AUTHORIZATION": "value",
             "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080"
         },
-        network="custom_network"
+        network="netwatch_ssh_attackpod_ci_network"
     )
 
     try:
