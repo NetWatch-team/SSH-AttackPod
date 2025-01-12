@@ -6,6 +6,9 @@ import time
 import logging
 import json
 import paramiko
+import socket
+import psutil
+import re
 
 logging.basicConfig(level=logging.INFO)
 
@@ -113,6 +116,22 @@ def docker_container(mock_server):
         container.stop()
         logging.info(f"Container {container.id} stopped.")
 
+def get_machine_ip_addresses():
+    ip_addresses = []
+    for interface, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.family == socket.AF_INET and addr.address != "127.0.0.1":
+                ip_addresses.append(addr.address)
+    return ip_addresses
+
+
+def match_value(actual_value, expected_value):
+    """Helper function to match actual_value against expected_value (which can be a regex pattern)."""
+    # Check if expected_value is a regex pattern (starts with ^, ends with $)
+    if isinstance(expected_value, str) and expected_value.startswith('^'):
+        return bool(re.match(expected_value, actual_value))
+    return actual_value == expected_value  # Direct comparison for other types
+
 
 def test_ssh_connect(mock_server, docker_container):
     container, ssh_port = docker_container
@@ -129,12 +148,10 @@ def test_ssh_connect(mock_server, docker_container):
 
     time.sleep(1)
 
-    # Retrieve logged requests from MockServer using localhost and the dynamic port
+    # Retrieve logged requests from MockServer
     response = requests.put(f"{mock_server}/mockserver/retrieve", params={"type": "REQUESTS"})
     response.raise_for_status()
     logged_requests = response.json()
-
-    # Debugging: Log the full structure of the logged requests
     logging.debug(f"Logged requests: {json.dumps(logged_requests, indent=2)}")
 
     # Now filter for the correct POST request to /add_attack
@@ -145,23 +162,38 @@ def test_ssh_connect(mock_server, docker_container):
 
     assert len(post_requests) > 0, "No POST request to /add_attack was logged."
 
+    source_ips = get_machine_ip_addresses()
+    ip_pattern = r"|".join([re.escape(ip) for ip in source_ips])
+
     expected_payload = {
+        "source_ip": rf"^{ip_pattern}$",
         "destination_ip": "111.222.33.44",
         "username": "root",
         "password": "aBruteForcePassword",
+        "evidence": rf"^Failed password for root from ({ip_pattern}) port \d+ ssh2$",
         "attack_type": "SSH_BRUTE_FORCE",
         "test_mode": False
     }
-    expected_headers = {"Content-Type": "application/json"}
+
+    expected_headers = {
+        "Content-Type": "application/json"
+    }
 
     # Check the payload of the first POST request (use the `json` key for the body)
     request_payload = post_requests[0].get("body", {}).get("json", {})
     logging.debug(f"Request payload: {request_payload}")
 
-    # Check if all values from expected_payload are present in request_payload
-    for key, value in expected_payload.items():
-        assert key in request_payload, f"Expected key '{key}' not found in payload."
-        assert request_payload[key] == value, f"Expected value for '{key}' to be '{value}', but got '{request_payload[key]}'"
+    for key, expected_value in expected_payload.items():
+        actual_value = str(request_payload.get(key))
+
+        # Check if the expected_value is a regex pattern (starts with '^')
+        if isinstance(expected_value, str) and expected_value.startswith('^'):
+            if not re.match(expected_value, actual_value):  # Match using the regex
+                pytest.fail(f"Expected value for '{key}' to match '{expected_value}', but got '{actual_value}'")
+        else:
+            # Direct comparison for non-boolean, non-string values
+            if actual_value != str(expected_value):
+                pytest.fail(f"Expected value for '{key}' to be '{expected_value}', but got '{actual_value}'")
 
     request_headers = post_requests[0].get("headers", {})
     logging.debug(f"Request headers: {request_headers}")
