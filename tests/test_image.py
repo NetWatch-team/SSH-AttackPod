@@ -116,6 +116,38 @@ def docker_container(mock_server):
         container.stop()
         logging.info(f"Container {container.id} stopped.")
 
+
+@pytest.fixture(scope="module")
+def docker_container_in_test_mode(mock_server):
+    client = docker.from_env()
+
+    # Run the container with a dynamically assigned host port for SSH in the netwatch_ssh_attackpod_ci_network
+    docker_image_tag = os.getenv("DOCKER_IMAGE_TAG", "latest")
+    container = client.containers.run(
+        f"netwatch_ssh-attackpod:{docker_image_tag}",
+        detach=True,
+        auto_remove=True,
+        ports={"22/tcp": None},
+        environment={
+            "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080",
+            "NETWATCH_TEST_MODE": "true"
+        },
+        network="netwatch_ssh_attackpod_ci_network"
+    )
+
+    try:
+        time.sleep(2)
+
+        container.reload()
+        ssh_host_port = container.attrs['NetworkSettings']['Ports']['22/tcp'][0]['HostPort']
+
+        logging.info(f"Docker container is exposing SSH on port {ssh_host_port} on the host.")
+
+        yield container, ssh_host_port
+    finally:
+        container.stop()
+        logging.info(f"Container {container.id} stopped.")
+
 def get_machine_ip_addresses():
     ip_addresses = []
     for interface, addrs in psutil.net_if_addrs().items():
@@ -228,3 +260,8 @@ def test_ssh_connect_existent_user(mock_server, docker_container):
     evidence = rf"^Failed password for appuser from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
     expected_payload["evidence"] = evidence
     ssh_connect_and_validate(mock_server, docker_container, username="appuser", password="aBruteForcePassword789", expected_payload=expected_payload)
+
+def test_payload_contains_test_mode(mock_server, docker_container_in_test_mode):
+    """Test if the POST payload contains test_mode true."""
+    expected_payload = { "test_mode": True }
+    ssh_connect_and_validate(mock_server, docker_container_in_test_mode, username="anyUser", password="anyPassword", expected_payload=expected_payload)
