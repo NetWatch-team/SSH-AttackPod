@@ -7,6 +7,7 @@ import threading
 import time
 import subprocess
 import signal
+import json
 
 
 logging.basicConfig(
@@ -54,7 +55,7 @@ def get_local_ip():
 
 
 def submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP):
-    json = {"source_ip": ip,
+    json_dict = {"source_ip": ip,
             "destination_ip": ATTACKPOD_LOCAL_IP,
             "username":user,
             "password":password,
@@ -69,13 +70,13 @@ def submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP):
 
     for attempt in range(5):
         try:
-            response = requests.post(url, json=json, headers=headers, timeout=5)
+            response = requests.post(url, json=json_dict, headers=headers, timeout=5)
             if response.status_code == 200:
 
                 if _check_if_in_test_mode():
-                    logging.info(f"Reported the following JSON to the NetWatch collector IN TEST MODE ATTACK WILL NOT BE SAVED: {json}")
+                    logging.info(f"Reported the following JSON to the NetWatch collector IN TEST MODE ATTACK WILL NOT BE SAVED: {json.dumps(json_dict)}")
                 else:
-                    logging.info(f"Reported the following JSON to the NetWatch collector: {json}")
+                    logging.info(f"Reported the following JSON to the NetWatch collector: {json.dumps(json_dict)}")
 
                 return
 
