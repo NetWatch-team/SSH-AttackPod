@@ -16,7 +16,7 @@ For test and development, start at **Preparataions and installation of SSH-Attac
 
 You may want to test your installetion of SSH-AttackPod as desribed in **Testing the SSH-AttackPod**.
 
-### Preparataions and installation of SSH-AttackPod
+### Preparations and installation of SSH-AttackPod
 
 #### Prerequisites
 To be able to run a SSH-AttackPod you need: 
@@ -29,9 +29,9 @@ To be able to run a SSH-AttackPod you need:
 #### 1. Obtain a API-key
 
 To run a SSH-AttackPod you need an API-key to be able to submit your results. To request a API-key:
- a. Go to [NetWatch community](https://community.netwatch.team/community) 
- b. Click: **Join the community**. 
- c. Enter your *email address* and you will receive an API key
+  a. Go to [NetWatch community](https://community.netwatch.team/community) 
+  b. Click: **Join the community**. 
+  c. Enter your *email address* and you will receive an API key
 
 #### 2. Docker
 
