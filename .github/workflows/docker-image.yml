@@ -1,0 +1,28 @@
+name: Docker Image CI
+
+on:
+  workflow_dispatch
+#  push:
+#    branches: [ "main" ]
+#  pull_request:
+#    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set DOCKER_IMAGE_TAG env var
+      run: echo "DOCKER_IMAGE_TAG=$(date +'%s-snapshot')" >> $GITHUB_ENV
+    - name: Build the Docker image
+      run: docker build src/ --tag netwatch_ssh-attackpod:$DOCKER_IMAGE_TAG
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r tests/requirements.txt
+    - name: Run python based integration tests via pytest
+      env:
+        DOCKER_IMAGE_TAG: ${{ env.DOCKER_IMAGE_TAG }}
+      run: |
+        pytest tests/
+
