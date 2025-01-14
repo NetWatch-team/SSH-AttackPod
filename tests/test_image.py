@@ -80,7 +80,7 @@ def setup_expectations(mock_server):
                 "headers": {
                     "Content-Type": "application/json"
                 },
-                "body": '{"status": "success"}'
+                "body": '{}'
             }
         }
     )
@@ -98,7 +98,6 @@ def docker_container(mock_server):
         auto_remove=True,
         ports={"22/tcp": None},
         environment={
-            "NETWATCH_COLLECTOR_AUTHORIZATION": "value",
             "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080"
         },
         network="netwatch_ssh_attackpod_ci_network"
