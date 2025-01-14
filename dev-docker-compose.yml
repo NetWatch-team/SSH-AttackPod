@@ -2,10 +2,12 @@ version: "3"
 
 services:
   NetWatchSSHAttackPod:
-    image: netwatchteam/netwatch_ssh-attackpod:latest
-    container_name: netwatch_ssh-attackpod 
+    build:
+      context: src
+    image: netwatch_ssh-attackpod:latest
+    container_name: netwatch_ssh-attackpod
     environment:
-      NETWATCH_COLLECTOR_AUTHORIZATION: ${NETWATCH_COLLECTOR_AUTHORIZATION}
+      NETWATCH_COLLECTOR_AUTHORIZATINON: ${NETWATCH_COLLECTOR_AUTHORIZATION}
       NETWATCH_COLLECTOR_URL: "https://api.netwatch.team"
       NETWATCH_TEST_MODE: ${NETWATCH_TEST_MODE:-false}
     restart: unless-stopped

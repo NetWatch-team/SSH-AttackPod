@@ -4,16 +4,28 @@ The NetWatch SSH-AttackPod is a modified OpenSSH server that records any attempt
 
 ## Deploy a SSH-AttackPod
 
-### Prerequisites
+This repository is prepared for normal operation and for test and development. In normal operation the latstes docker container is pulled and put in operation. For test and developement the SSH-AttackPod can be build from source and executed. 
+
+This repository comes with two *docker-compode files* for these specific purposes:
+ - `docker-compose.yml` is the file that is used for normal deployment for **production**.
+ - `dev-docker-compose.yml` is the file for **test and de development**.
+
+For normal deployment start at **Preparataions and installation of SSH-AttackPod** until **Normal use of SSH-AttackPod**, or execute steps **1 to 7**.
+
+For test and development, start at **Preparataions and installation of SSH-AttackPod** *do not follow the steps in Normal use of SSH-AttackPod* and continue with **Building SSH-AttackPod from source for test and development**, or execute steps **1 to 6** and step **8**.
+
+You may want to test your installetion of SSH-AttackPod as desribed in **Testing the SSH-AttackPod**.
+
+### Preparataions and installation of SSH-AttackPod
+
+#### Prerequisites
 To be able to run a SSH-AttackPod you need: 
 
  - a Linux system with root access
  - access to a public IP address 
  - to have Docker installed
  - obtain a API-key from [Netwatch](https://community.netwatch.team/)
-
-### Installation and configuration 
-
+ 
 #### 1. Obtain a API-key
 
 To run a SSH-AttackPod you need an API-key to be able to submit your results. To request a API-key:
@@ -88,92 +100,15 @@ Depending on Linux distribution you use you may need to reconfigure `/etc/ssh/ss
      systemctl status ssh.socket
      ```
 
-### 5. Download the SSH-AttackPod
+#### 5. Download the SSH-AttackPod
 
 To download the SSH-AttackPod and all nessessary files we clone the repository from Github.
 
 ```bash
-<<<<<<< HEAD
 git clone https://github.com/NetWatch-team/SSH-AttackPod.git
-=======
-# Add Docker's official GPG key:
-sudo apt-get update
-sudo apt-get install ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update
-sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-```
-Once installed, verify that Docker and Docker Compose are running by using the following commands:
-
-```bash
-docker version
-docker compose version
-```
-### 2. Move SSH Port Away from 22
-The SSH-AttackPod will need access to port 22. To prevent conflicts, you must change the default SSH port. Edit the sshd_config file:
-
-```bash
-sudo vim /etc/ssh/sshd_config
-```
-Find the line #Port 22, remove the #, and change the port number to one of your choice. Ensure your firewall allows access to this new port. Afterward, restart the SSH service:
-
-```bash
-sudo systemctl restart sshd
-```
-Alternatively, you can reboot your system.
-
-### 4. Configure the SSH-AttackPod
-Create a folder for the SSH-AttackPod at your preferred location. For this example, we’ll use /opt/:
-
-```bash
-mkdir -p /opt/NetWatch/AttackPods/SSH/
-cd /opt/NetWatch/AttackPods/SSH/
-```
-Next, create the docker-compose.yml file to store the configuration and facilitate container management:
-
-```bash
-echo 'version: "3"
-
-services:
-  NetWatchSSHAttackPod:
-    image: netwatchteam/netwatch_ssh-attackpod:latest
-    container_name: netwatch_ssh-attackpod 
-    environment:
-      NETWATCH_COLLECTOR_AUTHORIZATION: ${NETWATCH_COLLECTOR_AUTHORIZATION}
-      NETWATCH_COLLECTOR_URL: "https://api.netwatch.team"
-      NETWATCH_TEST_MODE: ${NETWATCH_TEST_MODE:-false}
-    restart: unless-stopped
-    ports:
-      - "22:22"
-    deploy:
-      resources:
-        limits:
-          cpus: "0.75"
-          memory: 750M
-        reservations:
-          cpus: "0.25"
-          memory: 200M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10M"
-        max-file: "2"' > ./docker-compose.yml
-```
-Next, create a .env file to store the API key you received from the NetWatch team. Use your preferred text editor to create the file and add the following content:
-
-```bash
-NETWATCH_COLLECTOR_AUTHORIZATION=<API_KEY_FROM_NETWATCH_TEAM>
->>>>>>> 5da5765e94a4618ed5d5f287ed1ef5e78e5163e8
 ```
 
-### 6. Configure the SSH-AttackPod
+#### 6. Configure the SSH-AttackPod
 
 In the cloned repository the file `template.env` shall be copied to `.env` and populated with the API-key your received from the Team.
 
@@ -189,7 +124,11 @@ In the cloned repository the file `template.env` shall be copied to `.env` and p
     NETWATCH_COLLECTOR_AUTHORIZATION=<API_KEY_FROM_NETWATCH_TEAM>
     ```
 
-### 7. Start the SSH-AttackPod
+### Normal use of SSH-AttackPod
+
+Now we are ready to run SSH-AttackPod in normal operation: 
+
+#### 7. Start the SSH-AttackPod
 To start the container, run the following commands *in the directory where the repository resides with the file:* `docker-compse.yml` *\[. e.g.:* `~/SSH-AttackPod`*\]*.
 
 This command will start the docker container detached and when successfull it will show the logs for this docker container. 
@@ -199,16 +138,25 @@ docker compose up -d --force-recreate && docker compose logs -tf
 ```
 When you're finished reviewing, you can stop the log output with `[Ctrl-C]`.
 
-### Testing the SSH-AttackPod
+### Building SSH-AttackPod from source for test and development
+
+Now we are ready to run SSH-AttackPod while building from source:
+
+#### 8. Start the SSH-AttackPod and build from source
+To start the container, run the following commands *in the directory where the repository resides with the file:* `dev-docker-compose.yml` *\[. e.g.:* `~/SSH-AttackPod`*\]*.
+
+This command will start the docker container detached and when successfull it will show the logs for this docker container. 
+
+```bash
+docker compose -f dev-docker-compose.yml up -d --force-recreate && docker compose logs -tf
+```
+When you're finished reviewing, you can stop the log output with `[Ctrl-C]`.
+
+## Testing the SSH-AttackPod
 
 When your SSH-AttackPod is running, all login attempts are being send to the Netwatch project. **This may include any attempt of you to test the system or when you try to login with your normal username and passowrd for your system!**
 
-<<<<<<< HEAD
 If you want to test whether the AttackPod is working as expected, you can enable *TEST_MODE* by removing the `#` in the `docker-compose.yml` file. This will configure the AttackPod to register and submit the attacks, but the backend will discard the infromation. Also it will not take further action.
 
 *Please remember to revert this change once you have completed your testing!*
-=======
-### 6. [Optional] Test the SSH-AttackPod
-If you want to test whether the AttackPod is working as expected, you can enable *TEST_MODE* by adding NETWATCH_TEST_MODE=true to your .env file. This will configure the AttackPod to register and submit the attacks, but the backend will discard themand not take further action.
-Please remember to revert this change once you have completed your testing!
->>>>>>> 5da5765e94a4618ed5d5f287ed1ef5e78e5163e8
+
