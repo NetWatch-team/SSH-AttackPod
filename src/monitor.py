@@ -22,7 +22,7 @@ def get_env(key, fallback):
 
 def _check_if_in_test_mode():
     test = get_env("NETWATCH_TEST_MODE", "false")
-    logging.info("TEst:" + test)
+    logging.info("Test:" + test)
     if get_env("NETWATCH_TEST_MODE", "false") != "false":
         return True
     
