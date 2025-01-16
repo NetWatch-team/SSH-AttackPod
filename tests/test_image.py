@@ -10,7 +10,37 @@ import socket
 import psutil
 import re
 
+REPORT_LOG_MESSAGE_PATTERN = r".*Reported .* to the NetWatch collector.*"
+
 logging.basicConfig(level=logging.INFO)
+
+def container_port(container, port_name, retries=10, delay=1):
+    """Helper function to wait for a specific port to be available in a container."""
+    retries_left = retries
+    while retries_left > 0:
+        container.reload()
+        ports = container.attrs.get("NetworkSettings", {}).get("Ports", {})
+        if port_name in ports and ports[port_name]:
+            return ports[port_name][0]["HostPort"]
+        retries_left -= 1
+        time.sleep(delay)
+    raise Exception(f"Container did not expose port {port_name} within the retry limit.")
+
+
+def wait_for_log_message(container, message, expected_count=1, retries=10, delay=2):
+    """Wait for a specific log message to appear in the container logs a specified number of times."""
+    for _ in range(retries):
+        logs = container.logs().decode('utf-8')
+        match_count = len(re.findall(message, logs))
+        if match_count >= expected_count:
+            logging.info(f"Found '{message}' {match_count} times.")
+            return
+        logging.info(f"Current match count: {match_count}. Waiting for more matches...")
+        time.sleep(delay)
+
+    logging.error(f"Failed to find '{message}' {expected_count} times after {retries} retries.")
+    raise Exception(f"Timeout reached while waiting for log message matches.")
+
 
 @pytest.fixture(scope="session")
 def mock_server():
@@ -31,11 +61,10 @@ def mock_server():
     )
 
     try:
-        time.sleep(2)
-
-        container.reload()
-        port = container.attrs["NetworkSettings"]["Ports"]["1080/tcp"][0]["HostPort"]
+        port = container_port(container, port_name="1080/tcp")
         base_url = f"http://localhost:{port}"
+
+        wait_for_log_message(container, ".*started on port: 1080.*")
 
         setup_expectations(base_url)
 
@@ -104,12 +133,8 @@ def docker_container(mock_server):
     )
 
     try:
-        time.sleep(2)
-
-        container.reload()
-        ssh_host_port = container.attrs['NetworkSettings']['Ports']['22/tcp'][0]['HostPort']
-
-        logging.info(f"Docker container is exposing SSH on port {ssh_host_port} on the host.")
+        ssh_host_port = container_port(container, port_name="22/tcp")
+        wait_for_log_message(container, ".*\\[\\+\\] Starting SSHD.*")
 
         yield container, ssh_host_port
     finally:
@@ -175,6 +200,7 @@ def ssh_connect_and_validate(mock_server, docker_container, username, password, 
     ssh_client = paramiko.SSHClient()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+    initial_matches = len(re.findall(REPORT_LOG_MESSAGE_PATTERN, container.logs().decode('utf-8')))
     try:
         ssh_client.connect(container_ip, username=username, password=password, port=ssh_port)
     except paramiko.ssh_exception.SSHException:
@@ -182,7 +208,7 @@ def ssh_connect_and_validate(mock_server, docker_container, username, password, 
     finally:
         ssh_client.close()
 
-    time.sleep(1)
+    wait_for_log_message(container, REPORT_LOG_MESSAGE_PATTERN, expected_count=initial_matches + 1)
 
     # Retrieve logged requests from MockServer
     response = requests.put(f"{mock_server}/mockserver/retrieve", params={"type": "REQUESTS"})
