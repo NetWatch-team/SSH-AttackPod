@@ -161,3 +161,10 @@ If you want to test whether the AttackPod is working as expected, you can enable
 
 *Please remember to revert this change once you have completed your testing!*
 
+### 9. [Optional] Test the SSH-AttackPod
+If you want to test whether the AttackPod is working as expected, you can enable *TEST_MODE* by adding NETWATCH_TEST_MODE=true to your .env file. This will configure the AttackPod to register and submit the attacks, but the backend will discard themand not take further action.
+Please remember to revert this change once you have completed your testing!
+
+### 10. Available container images
+Additionally to the images provided to [docker.io](https://hub.docker.com/r/netwatchteam/netwatch_ssh-attackpod) there are different architectures available from the GitHub Container Registry (ghcr.io) [here](https://github.com/NetWatch-team/SSH-AttackPod/pkgs/container/ssh-attackpod).
+

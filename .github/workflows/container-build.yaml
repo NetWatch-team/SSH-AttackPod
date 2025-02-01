@@ -1,0 +1,108 @@
+###
+### This workflow creates container images for
+###     * amd64
+###     * arm64
+### architectures.
+###
+### It's triggered either manually by a workflow_dispatch using GitHub Actions UI or automatically when a new GitHub release is created.
+###
+### Resulting container images are named as follows:
+###     ghcr.io/{lowercase github org name}/{lowercase github repo name}:{version}-{architecture}
+### with {version} taken from workflow_dispatch input or the Git tag name of a GitHub release.
+###
+name: Multi arch container image build
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag_version:
+        required: true
+        description: The semver image tag for the resulting container images
+      override_latest:
+        required: true
+        description: Whether the resulting image should overwrite the "latest" tags
+        default: "false"
+
+  release:
+    types: [released]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+        matrix:
+            include:
+                - arch: amd64
+                - arch: arm64
+    steps:
+        - name: Checkout Code
+          uses: actions/checkout@v4
+
+        - name: Set up QEMU
+          uses: docker/setup-qemu-action@v3
+
+        - name: Set up Docker Buildx
+          uses: docker/setup-buildx-action@v3
+          with:
+            platforms: linux/${{ matrix.arch }}
+
+        - name: Build image repo name
+          run: |
+            version=""
+            overwrite_latest=""
+            if [ -n "${{ github.event.inputs.image_tag_version }}" ]; then
+                # use input string as version
+                version="${{ github.event.inputs.image_tag_version }}"
+                overwrite_latest="${{ github.event.inputs.override_latest }}"
+            else
+                # use git tag as version
+                version="${{ github.ref_name }}"
+                overwrite_latest="true"
+            fi
+
+            if [ -z "$version" ] || [ -z "$overwrite_latest" ]; then
+                echo "Image tag version or overwrite_latest flag could not be determined"
+                exit 1
+            fi
+
+            repo="${{ github.repository }}"
+            echo VERSIONED_IMAGE_FQN="ghcr.io/${repo,,}:$version-${{ matrix.arch }}" >> $GITHUB_ENV
+            echo LATEST_IMAGE_FQN="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
+            echo OVERWRITE_LATEST="$overwrite_latest" >> $GITHUB_ENV
+
+        - name: Docker build
+          uses: docker/build-push-action@v6
+          with:
+              context: src
+              file: src/Dockerfile
+              platforms: linux/${{ matrix.arch }}
+              tags: |
+                ${{ env.VERSIONED_IMAGE_FQN }}
+                ${{ env.LATEST_IMAGE_FQN }}
+              load: true
+              push: false
+
+        - name: Run integration tests
+          env:
+            DOCKER_IMAGE_FQN: ${{ env.VERSIONED_IMAGE_FQN }}
+          run: |
+            # Install dependencies
+            python -m pip install --upgrade pip
+            pip install -r tests/requirements.txt
+
+            # Run python based integration tests via pytest
+            pytest tests/
+
+        - name: Login to GHCR
+          uses: docker/login-action@v3
+          with:
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Docker push to GHCR
+          run: |
+            # upload images
+            docker push "$VERSIONED_IMAGE_FQN"
+            if [ "true" == "$OVERWRITE_LATEST" ]; then
+              docker push "$LATEST_IMAGE_FQN"
+            fi

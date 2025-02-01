@@ -1,11 +1,10 @@
-name: Docker Image CI
+name: Container image test
 
 on:
-  workflow_dispatch
-#  push:
-#    branches: [ "main" ]
-#  pull_request:
-#    branches: [ "main" ]
+  workflow_dispatch:
+
+  pull_request:
+    branches: ["main"]
 
 jobs:
   build:
@@ -22,7 +21,6 @@ jobs:
         pip install -r tests/requirements.txt
     - name: Run python based integration tests via pytest
       env:
-        DOCKER_IMAGE_TAG: ${{ env.DOCKER_IMAGE_TAG }}
+        DOCKER_IMAGE_FQN: netwatch_ssh-attackpod:${{ env.DOCKER_IMAGE_TAG }}
       run: |
         pytest tests/
-

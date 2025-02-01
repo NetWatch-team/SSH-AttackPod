@@ -12,6 +12,7 @@ import re
 
 REPORT_LOG_MESSAGE_PATTERN = r".*Reported .* to the NetWatch collector.*"
 
+DOCKER_IMAGE_FQN = os.getenv("DOCKER_IMAGE_FQN", "netwatch_ssh-attackpod:latest")
 logging.basicConfig(level=logging.INFO)
 
 def container_port(container, port_name, retries=10, delay=1):
@@ -120,9 +121,8 @@ def docker_container(mock_server):
     client = docker.from_env()
 
     # Run the container with a dynamically assigned host port for SSH in the netwatch_ssh_attackpod_ci_network
-    docker_image_tag = os.getenv("DOCKER_IMAGE_TAG", "latest")
     container = client.containers.run(
-        f"netwatch_ssh-attackpod:{docker_image_tag}",
+        DOCKER_IMAGE_FQN,
         detach=True,
         auto_remove=True,
         ports={"22/tcp": None},
@@ -147,9 +147,8 @@ def docker_container_in_test_mode(mock_server):
     client = docker.from_env()
 
     # Run the container with a dynamically assigned host port for SSH in the netwatch_ssh_attackpod_ci_network
-    docker_image_tag = os.getenv("DOCKER_IMAGE_TAG", "latest")
     container = client.containers.run(
-        f"netwatch_ssh-attackpod:{docker_image_tag}",
+        DOCKER_IMAGE_FQN,
         detach=True,
         auto_remove=True,
         ports={"22/tcp": None},
