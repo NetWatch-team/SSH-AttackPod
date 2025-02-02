@@ -13,7 +13,6 @@ import re
 REPORT_LOG_MESSAGE_PATTERN = r".*Reported .* to the NetWatch collector.*"
 
 DOCKER_IMAGE_FQN = os.getenv("DOCKER_IMAGE_FQN", "netwatch_ssh-attackpod:latest")
-
 logging.basicConfig(level=logging.INFO)
 
 logging.info(msg=f'the value of DOCKER_IMAGE_FQN is "{DOCKER_IMAGE_FQN}"')
