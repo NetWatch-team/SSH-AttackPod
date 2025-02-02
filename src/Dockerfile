@@ -16,14 +16,13 @@ RUN apt-get install --no-install-recommends -y \
         putty-tools \
         python3-twisted
 RUN apt-get build-dep --no-install-recommends -y openssh-server
-RUN mkdir -p /src && cd /src
-RUN apt-get source openssh-server
-RUN cd openssh-*
-RUN sed -i 's/^\([ \t]*\)\(struct passwd \*pw = authctxt->pw;\)/\1logit("Login attempt by username '\''%s'\'', password '\''%s'\'', from ip '\''%.200s'\''", authctxt->user, password, ssh_remote_ipaddr(ssh));\nreturn 0;\1\2/' auth-passwd.c
-RUN debchange --nmu 'add verbose logging of usernames and passwords'
-RUN EDITOR=true dpkg-source --commit . 'chatty-ssh.patch'
-RUN debuild -us -uc -i -I
-RUN apt-get clean && apt-get autoremove -y
+RUN mkdir -p /src && cd /src && apt-get source openssh-server
+RUN cd /src && cd openssh-* && \
+    sed -i 's/^\([ \t]*\)\(struct passwd \*pw = authctxt->pw;\)/\1logit("Login attempt by username '\''%s'\'', password '\''%s'\'', from ip '\''%.200s'\''", authctxt->user, password, ssh_remote_ipaddr(ssh));\nreturn 0;\1\2/' auth-passwd.c
+RUN cd /src && cd openssh-* && debchange --nmu 'add verbose logging of usernames and passwords'
+RUN cd /src && cd openssh-* && EDITOR=true dpkg-source --commit . 'chatty-ssh.patch'
+RUN cd /src && cd openssh-* && debuild -us -uc -i -I
+RUN cd /src && cd openssh-* && apt-get clean && apt-get autoremove -y
 
 # Stage 2: Runtime stage
 FROM ubuntu:22.04
