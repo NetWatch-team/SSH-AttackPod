@@ -47,7 +47,7 @@ jobs:
           fi
 
           repo="${{ github.repository }}"
-          echo VERSIONED_IMAGE_FQN="ghcr.io/${repo,,}:$version-${{ matrix.arch }}" >> $GITHUB_ENV
+          echo VERSIONED_IMAGE_FQN="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
           echo LATEST_IMAGE_FQN="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
           echo OVERWRITE_LATEST="$overwrite_latest" >> $GITHUB_ENV
 
@@ -58,8 +58,7 @@ jobs:
           file: src/Dockerfile
           platforms: linux/${{ matrix.arch }}
           tags: |
-            ${{ env.VERSIONED_IMAGE_FQN }}
-            ${{ env.LATEST_IMAGE_FQN }}
+            netwatch_ssh-attackpod:latest-${{ matrix.arch }}
           load: true
           push: false
 
@@ -70,6 +69,6 @@ jobs:
 
       - name: Run python based integration tests via pytest
         env:
-          DOCKER_IMAGE_FQN: ${{ env.VERSIONED_IMAGE_FQN }}
+          DOCKER_IMAGE_FQN: netwatch_ssh-attackpod:latest-${{ matrix.arch }}
         run: |
           pytest tests/
