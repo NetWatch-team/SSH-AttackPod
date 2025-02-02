@@ -5,25 +5,25 @@ FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Enable 'deb-src' entries and install dependencies
-RUN sed -i -e 's/^# deb-src/deb-src/' /etc/apt/sources.list && \
-    apt-get update && \
-    apt-get install --no-install-recommends -y \
+RUN sed -i -e 's/^# deb-src/deb-src/' /etc/apt/sources.list
+RUN apt-get update 
+RUN apt-get install --no-install-recommends -y \
         build-essential \
         fakeroot \
         devscripts \
         tzdata \
         openssh-client \
         putty-tools \
-        python3-twisted && \
-    apt-get build-dep --no-install-recommends -y openssh-server && \
-    mkdir -p /src && cd /src && \
-    apt-get source openssh-server && \
-    cd openssh-* && \
-    sed -i 's/^\([ \t]*\)\(struct passwd \*pw = authctxt->pw;\)/\1logit("Login attempt by username '\''%s'\'', password '\''%s'\'', from ip '\''%.200s'\''", authctxt->user, password, ssh_remote_ipaddr(ssh));\nreturn 0;\1\2/' auth-passwd.c && \
-    debchange --nmu 'add verbose logging of usernames and passwords' && \
-    EDITOR=true dpkg-source --commit . 'chatty-ssh.patch' && \
-    debuild -us -uc -i -I && \
-    apt-get clean && apt-get autoremove -y
+        python3-twisted
+RUN apt-get build-dep --no-install-recommends -y openssh-server
+RUN mkdir -p /src && cd /src
+RUN apt-get source openssh-server
+RUN cd openssh-*
+RUN sed -i 's/^\([ \t]*\)\(struct passwd \*pw = authctxt->pw;\)/\1logit("Login attempt by username '\''%s'\'', password '\''%s'\'', from ip '\''%.200s'\''", authctxt->user, password, ssh_remote_ipaddr(ssh));\nreturn 0;\1\2/' auth-passwd.c
+RUN debchange --nmu 'add verbose logging of usernames and passwords'
+RUN EDITOR=true dpkg-source --commit . 'chatty-ssh.patch'
+RUN debuild -us -uc -i -I
+RUN apt-get clean && apt-get autoremove -y
 
 # Stage 2: Runtime stage
 FROM ubuntu:22.04
