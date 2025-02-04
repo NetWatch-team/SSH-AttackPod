@@ -6,10 +6,6 @@ The NetWatch SSH-AttackPod is a modified OpenSSH server that records any attempt
 
 This repository is prepared for normal operation and for test and development. In normal operation the latstes docker container is pulled and put in operation. For test and developement the SSH-AttackPod can be build from source and executed. 
 
-This repository comes with two *docker-compode files* for these specific purposes:
- - `docker-compose.yml` is the file that is used for normal deployment for **production**.
- - `dev-docker-compose.yml` is the file for **test and de development**.
-
 For normal deployment start at **Preparataions and installation of SSH-AttackPod** until **Normal use of SSH-AttackPod**, or execute steps **1 to 7**.
 
 For test and development, start at **Preparataions and installation of SSH-AttackPod** *do not follow the steps in Normal use of SSH-AttackPod* and continue with **Building SSH-AttackPod from source for test and development**, or execute steps **1 to 6** and step **8**.
@@ -144,12 +140,12 @@ When you're finished reviewing, you can stop the log output with `[Ctrl-C]`.
 Now we are ready to run SSH-AttackPod while building from source:
 
 #### 8. Start the SSH-AttackPod and build from source
-To start the container, run the following commands *in the directory where the repository resides with the file:* `dev-docker-compose.yml` *\[. e.g.:* `~/SSH-AttackPod`*\]*.
+To build and start the docker container from source, run the following commands *in the directory where the repository resides with the file:* `docker-compose.yml` *\[. e.g.:* `~/SSH-AttackPod`*\]*.
 
-This command will start the docker container detached and when successfull it will show the logs for this docker container. 
+This command will build the docker container from source and start the docker container detached and when successfull it will show the logs for this docker container. 
 
 ```bash
-docker compose -f dev-docker-compose.yml up -d --force-recreate && docker compose logs -tf
+docker compose build --no-cache && docker compose up -d --force-recreate && docker compose logs -tf
 ```
 When you're finished reviewing, you can stop the log output with `[Ctrl-C]`.
 
@@ -157,7 +153,7 @@ When you're finished reviewing, you can stop the log output with `[Ctrl-C]`.
 
 When your SSH-AttackPod is running, all login attempts are being send to the Netwatch project. **This may include any attempt of you to test the system or when you try to login with your normal username and passowrd for your system!**
 
-If you want to test whether the AttackPod is working as expected, you can enable *TEST_MODE* by removing the `#` in the `docker-compose.yml` file. This will configure the AttackPod to register and submit the attacks, but the backend will discard the infromation. Also it will not take further action.
+If you want to test whether the AttackPod is working as expected, you can enable *TEST_MODE* by adding NETWATCH_TEST_MODE=true to your .env file. This will configure the AttackPod to register and submit the attacks, but the backend will discard themand not take further action.
 
 *Please remember to revert this change once you have completed your testing!*
 

@@ -4,6 +4,8 @@ services:
   NetWatchSSHAttackPod:
     image: netwatchteam/netwatch_ssh-attackpod:latest
     container_name: netwatch_ssh-attackpod 
+    build:
+      context: src
     environment:
       NETWATCH_COLLECTOR_AUTHORIZATION: ${NETWATCH_COLLECTOR_AUTHORIZATION}
       NETWATCH_COLLECTOR_URL: "https://api.netwatch.team"
