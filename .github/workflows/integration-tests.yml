@@ -27,30 +27,6 @@ jobs:
         with:
           platforms: linux/${{ matrix.arch }}
 
-      - name: Build image repo name
-        run: |
-          version=""
-          overwrite_latest=""
-          if [ -n "${{ github.event.inputs.image_tag_version }}" ]; then
-              # use input string as version
-              version="${{ github.event.inputs.image_tag_version }}"
-              overwrite_latest="${{ github.event.inputs.override_latest }}"
-          else
-              # use git tag as version
-              version="${{ github.ref_name }}"
-              overwrite_latest="true"
-          fi
-
-          if [ -z "$version" ] || [ -z "$overwrite_latest" ]; then
-              echo "Image tag version or overwrite_latest flag could not be determined"
-              exit 1
-          fi
-
-          repo="${{ github.repository }}"
-          echo VERSIONED_IMAGE_FQN="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
-          echo LATEST_IMAGE_FQN="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
-          echo OVERWRITE_LATEST="$overwrite_latest" >> $GITHUB_ENV
-
       - name: Docker build
         uses: docker/build-push-action@v6
         with:
