@@ -46,5 +46,6 @@ jobs:
       - name: Run python based integration tests via pytest
         env:
           DOCKER_IMAGE_FQN: netwatch_ssh-attackpod:latest-${{ matrix.arch }}
+          DEB_HOST_ARCH: ${{ matrix.arch }}
         run: |
           pytest tests/
