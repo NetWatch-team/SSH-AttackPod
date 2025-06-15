@@ -6,7 +6,7 @@ The NetWatch SSH-AttackPod is a modified OpenSSH server that records any attempt
 To be able to run a SSH-AttackPod you need: 
 
  - to have [Docker installed](#1-installation-of-docker)
- - [obtain an API-key](#1-obtain-a-api-key-from-netwatch)
+ - [obtain an API-key](#1-obtain-an-api-key-from-netwatch)
  - public IP address: If the system you are running SSH-AttackPod on is not reachable over the internet you have to configure port forwarding on your firewall
 
 
