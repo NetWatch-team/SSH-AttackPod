@@ -159,6 +159,6 @@ Depending on Linux distribution you use you may need to reconfigure `/etc/ssh/ss
 
 If you want to build SSH-AttackPod from source you can do by: 
 
-    ```bash
-    docker compose build --no-cache
-    ```
+```bash
+docker compose build --no-cache
+```
