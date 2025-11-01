@@ -1,5 +1,7 @@
 version: "3"
-
+networks:
+  default:
+    enable_ipv6: true
 services:
   NetWatchSSHAttackPod:
     image: netwatchteam/netwatch_ssh-attackpod:latest
@@ -12,7 +14,8 @@ services:
       NETWATCH_TEST_MODE: ${NETWATCH_TEST_MODE:-false}
     restart: unless-stopped
     ports:
-      - "${NETWATCH_PORT:-22}:22"
+      - "${NETWATCH_PORT:-22}:2222"
+      - "[::]:${NETWATCH_PORT:-22}:2222"
     deploy:
       resources:
         limits:
