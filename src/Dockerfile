@@ -10,13 +10,13 @@ RUN echo "deb-src http://archive.ubuntu.com/ubuntu noble main restricted univers
     echo "deb-src http://archive.ubuntu.com/ubuntu noble-security main restricted universe multiverse" >> /etc/apt/sources.list && \
     apt-get update && \
     apt-get install --no-install-recommends -y \
-        build-essential \
-        fakeroot \
-        devscripts \
-        tzdata \
-        openssh-client \
-        putty-tools \
-        python3-twisted && \
+    build-essential \
+    fakeroot \
+    devscripts \
+    tzdata \
+    openssh-client \
+    putty-tools \
+    python3-twisted && \
     apt-get build-dep --no-install-recommends -y openssh-server && \
     mkdir -p /src && cd /src && \
     apt-get source openssh-server && \
@@ -36,8 +36,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install runtime dependencies only
 RUN apt-get update && \
     apt-get install --no-install-recommends -y \
-        python3-pip \
-        openssh-server && \
+    python3-pip \
+    openssh-server && \
     apt-get clean && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
@@ -78,8 +78,12 @@ ENV PATH="/home/appuser/venv/bin:$PATH"
 # Copy application code
 COPY monitor.py /home/appuser/code/
 
-# Expose SSH port
-EXPOSE 22
+# Move sshd to Port 2222
+# change /etc/ssh/sshd_config by uncommenting Port 22 and changing it to Port 2222
+RUN sed -i.orig -e 's/^#\(Port 22\)/\122/' /etc/ssh/sshd_config
+
+# Expose 2222
+EXPOSE 2222
 
 # Report the version of the openSSH server
 RUN sshd -V
