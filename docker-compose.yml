@@ -1,12 +1,10 @@
-version: "3"
-
 services:
   NetWatchSSHAttackPod:
     image: netwatchteam/netwatch_ssh-attackpod:latest
-    container_name: netwatch_ssh-attackpod 
-    build:
-      context: src
+    container_name: netwatch_ssh-attackpod
     environment:
+      SENSOR_UUID: "<SENSOR_UUID>"
+      SENSOR_TLP: "CLEAR"
       NETWATCH_COLLECTOR_AUTHORIZATION: ${NETWATCH_COLLECTOR_AUTHORIZATION}
       NETWATCH_COLLECTOR_URL: "https://api.netwatch.team"
       NETWATCH_TEST_MODE: ${NETWATCH_TEST_MODE:-false}

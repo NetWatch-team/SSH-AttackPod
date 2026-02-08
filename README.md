@@ -164,3 +164,30 @@ Please remember to revert this change once you have completed your testing!
 ### 10. Available container images
 Additionally to the images provided to [docker.io](https://hub.docker.com/r/netwatchteam/netwatch_ssh-attackpod) there are different architectures available from the GitHub Container Registry (ghcr.io) [here](https://github.com/NetWatch-team/SSH-AttackPod/pkgs/container/ssh-attackpod).
 
+## RFC 1918 Private IP Filtering
+
+The SSH-AttackPod automatically filters out attacks involving private/local IP addresses to prevent false positives and reduce backend processing load. Attacks are **not reported** to the NetWatch collector if either the source IP or destination IP is a private/non-routable address.
+
+### Filtered IP Ranges
+
+The following IP ranges are considered private and will cause attacks to be filtered:
+
+- **RFC 1918 Private Networks:**
+  - `10.0.0.0/8` (10.0.0.0 - 10.255.255.255)
+  - `172.16.0.0/12` (172.16.0.0 - 172.31.255.255)
+  - `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
+
+- **Loopback Addresses:**
+  - `127.0.0.0/8` (127.0.0.0 - 127.255.255.255)
+
+- **Link-Local Addresses:**
+  - `169.254.0.0/16` (169.254.0.0 - 169.254.255.255)
+
+### Behavior
+
+When an SSH login attempt is detected and either the source or destination IP is in one of these ranges, the AttackPod will:
+1. Log the filtered attack at INFO level: `"Skipping attack from/to private IP - Source: X.X.X.X, Destination: Y.Y.Y.Y, User: username"`
+2. **Not** submit the attack to the NetWatch collector
+
+This filtering happens automatically and requires no configuration.
+

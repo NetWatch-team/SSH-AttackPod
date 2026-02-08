@@ -8,7 +8,10 @@ import time
 import subprocess
 import signal
 import json
+import queue
+import ipaddress
 
+attack_queue = queue.Queue()
 
 logging.basicConfig(
     encoding="utf-8",
@@ -28,6 +31,29 @@ def _check_if_in_test_mode():
         return True
     
     return False
+
+
+def is_private_ip(ip: str) -> bool:
+    """
+    Check if an IP address is private/non-routable per RFC 1918 and related standards.
+    
+    This includes:
+    - RFC 1918 private addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    - Loopback addresses (127.0.0.0/8)
+    - Link-local addresses (169.254.0.0/16)
+    
+    Args:
+        ip: IP address string to check
+        
+    Returns:
+        True if IP is private/non-routable, False otherwise
+    """
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        return ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
+    except ValueError:
+        logging.warning(f"Invalid IP address format: {ip}")
+        return False
 
 
 def get_local_ip():
@@ -54,21 +80,38 @@ def get_local_ip():
     exit(1)
 
 
+
 def submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP):
-    json_dict = {"source_ip": ip,
-            "destination_ip": ATTACKPOD_LOCAL_IP,
-            "username":user,
-            "password":password,
-            "attack_timestamp": datetime.now().isoformat(),
-            "evidence":evidence,
-            "attack_type": "SSH_BRUTE_FORCE",
-            "test_mode":_check_if_in_test_mode()
-            }
+    # Check if source or destination is a private/local IP (RFC 1918 filtering)
+    if is_private_ip(ip) or is_private_ip(ATTACKPOD_LOCAL_IP):
+        logging.info(f"Skipping attack from/to private IP - Source: {ip}, Destination: {ATTACKPOD_LOCAL_IP}, User: {user}")
+        return
 
-    url = f"{get_env('NETWATCH_COLLECTOR_URL', '')}/add_attack"
-    headers = {"authorization": get_env("NETWATCH_COLLECTOR_AUTHORIZATION", "")}
+    json_dict = {"timestamp": datetime.now().isoformat(),
+                 "uuid": get_env("SENSOR_UUID", ""),
+                 "tlp": get_env("SENSOR_TLP", "CLEAR"),
+                 "source": ip,
+                 "destination": ATTACKPOD_LOCAL_IP,
+                 "attack_type": "SSH_BRUTE_FORCE",
+                 "source_type": "IP",
+                 "test_mode": _check_if_in_test_mode(),
+                 "evidence": evidence,
+                 "metadata": {
+                     "username": user,
+                     "password": password,
+                 }
+                 }
 
-    for attempt in range(5):
+    attack_queue.put(json_dict)
+
+def attack_forward_worker(attack_queue):
+
+    while True:
+        json_dict = attack_queue.get()
+
+        url = f"{get_env('NETWATCH_COLLECTOR_URL', '')}/v2/add_attack/ssh_bruteforce"
+        headers = {"Authorization": get_env("NETWATCH_COLLECTOR_AUTHORIZATION", "")}
+
         try:
             response = requests.post(url, json=json_dict, headers=headers, timeout=5)
             if response.status_code == 200:
@@ -78,15 +121,18 @@ def submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP):
                 else:
                     logging.info(f"Reported the following JSON to the NetWatch collector: {json.dumps(json_dict)}")
 
-                return
-
-            logging.error(f"[!] Got a non 200 status code from the collector: {response.status_code} with message: {response.text}")
+            else:
+                logging.error(f"[!] Got a non 200 status code from the collector: {response.status_code} with message: {response.text}")
 
         except requests.RequestException as e:
             logging.error(f"[!] Got a request exception while submitting the attack: {e}")
+            attack_queue.put(json_dict)
+            time.sleep(10)
 
         except Exception as e:
             logging.error(f"[!] Got an exception while submitting the attack: {e}")
+            attack_queue.put(json_dict)
+            time.sleep(10)
 
 
 def reap_children(signum, frame):
@@ -144,6 +190,10 @@ if __name__ == '__main__':
     logging.info("[+] Starting SSHD")
     sshd_thread = threading.Thread(target=run_sshd, args=())
     sshd_thread.start()
+
+    logging.info("[+] Starting the attack forward worker")
+    attack_submit_worker_thread = threading.Thread(target=attack_forward_worker, args=(attack_queue,))
+    attack_submit_worker_thread.start()
 
     with open("/var/log/ssh.log", 'r') as logfile:
         logfile.seek(0, os.SEEK_END)
