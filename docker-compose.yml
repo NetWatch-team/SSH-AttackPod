@@ -10,7 +10,7 @@ services:
       NETWATCH_TEST_MODE: ${NETWATCH_TEST_MODE:-false}
     restart: unless-stopped
     ports:
-      - "22:22"
+      - "${NETWATCH_PORT:-22}:22"
     deploy:
       resources:
         limits:
