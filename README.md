@@ -49,12 +49,12 @@ In the cloned repository copy the file `template.env` to `.env` and populated wi
 #### 4. Start the SSH-AttackPod in test-mode
 To start the container, run the following commands *in the directory where the repository resides with the file:* `docker-compose.yml` *\[. e.g.:* `~/SSH-AttackPod`*\]*.
 
-This command will start the docker container detached and when successfull it will show the logs for this docker container. 
+This command will start the docker container attached to your shell and enables you to view the logs. 
 
 ```bash
 docker compose up --force-recreate
 ```
-When you're finished reviewing, you can stop with `[Ctrl-C]`.
+When you're finished reviewing, you can stop the container with `[Ctrl-C]`.
 
 #### 5. Switch SSH-AttackPod to production mode (non test-mode)
 
