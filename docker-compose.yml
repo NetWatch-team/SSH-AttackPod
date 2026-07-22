@@ -1,6 +1,7 @@
 services:
   NetWatchSSHAttackPod:
-    image: netwatchteam/netwatch_ssh-attackpod:latest
+    build: ./src
+    image: ghcr.io/netwatch-team/ssh-attackpod:latest
     container_name: netwatch_ssh-attackpod
     environment:
       SENSOR_UUID: "<SENSOR_UUID>"

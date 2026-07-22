@@ -106,8 +106,6 @@ jobs:
 
         - name: Docker push to GHCR
           run: |
-            # upload images
+            # upload images (both version tag and latest tag)
             docker push "$VERSIONED_IMAGE_FQN"
-            if [ "true" == "$OVERWRITE_LATEST" ]; then
-              docker push "$LATEST_IMAGE_FQN"
-            fi
+            docker push "$LATEST_IMAGE_FQN"
