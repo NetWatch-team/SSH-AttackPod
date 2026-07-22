@@ -4,10 +4,8 @@ FROM ubuntu:24.04 AS builder
 # Set environment variable for non-interactive installations
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Enable 'deb-src' entries and install dependencies
-RUN echo "deb-src http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb-src http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb-src http://archive.ubuntu.com/ubuntu noble-security main restricted universe multiverse" >> /etc/apt/sources.list && \
+# Enable 'deb-src' entries dynamically for all architectures and install dependencies
+RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true && \
     apt-get update && \
     apt-get install --no-install-recommends -y \
     build-essential \
@@ -37,6 +35,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install --no-install-recommends -y \
     python3-pip \
+    python3-venv \
     openssh-server && \
     apt-get clean && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
@@ -47,26 +46,18 @@ COPY --from=builder /src/openssh-*/debian/tmp/usr/sbin/sshd /usr/sbin/sshd
 # Create a non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser
 
-# Adjust permissions for SSH and log files
-RUN mkdir -p /etc/ssh && chown -R appuser:appuser /etc/ssh && \
-    touch /var/log/ssh.log && chown appuser:appuser /var/log/ssh.log
+# Adjust permissions for SSH, run directory and log files
+RUN mkdir -p /etc/ssh /run/sshd && \
+    chmod 0755 /run/sshd && \
+    touch /var/log/ssh.log
 
 # Set working directory
 WORKDIR /home/appuser/code
 RUN chown -R appuser:appuser /home/appuser
 
-# Switch to non-root user
+# Switch to appuser to install virtualenv dependencies
 USER appuser
-
-# Copy runtime requirements and install them
 COPY requirements.txt /home/appuser/code/
-
-# Install python3-venv (required for creating venv)
-USER root
-RUN apt-get update && apt-get install -y python3-venv && rm -rf /var/lib/apt/lists/*
-
-# Back to appuser for security
-USER appuser
 
 # Create virtual environment and install dependencies
 RUN python3 -m venv /home/appuser/venv && \
@@ -77,6 +68,9 @@ ENV PATH="/home/appuser/venv/bin:$PATH"
 
 # Copy application code
 COPY monitor.py /home/appuser/code/
+
+# Switch back to root for system configuration and execution
+USER root
 
 # Move sshd to Port 2222
 # change /etc/ssh/sshd_config by uncommenting Port 22 and changing it to Port 2222
@@ -90,3 +84,4 @@ RUN sshd -V
 
 # Command to run your application
 CMD ["python3", "monitor.py"]
+

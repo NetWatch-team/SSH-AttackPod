@@ -100,13 +100,13 @@ def setup_expectations(mock_server):
         }
     )
 
-    # Expectation for POST /add_attack
+    # Expectation for POST /v2/add_attack/ssh_bruteforce
     requests.put(
         f"{mock_server}/mockserver/expectation",
         json={
             "httpRequest": {
                 "method": "POST",
-                "path": "/add_attack"
+                "path": "/v2/add_attack/ssh_bruteforce"
             },
             "httpResponse": {
                 "statusCode": 200,
@@ -128,15 +128,16 @@ def docker_container(mock_server):
         DOCKER_IMAGE_FQN,
         detach=True,
         auto_remove=True,
-        ports={"22/tcp": None},
+        ports={"2222/tcp": None},
         environment={
-            "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080"
+            "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080",
+            "NETWATCH_ALLOW_PRIVATE_IPS": "true"
         },
         network="netwatch_ssh_attackpod_ci_network"
     )
 
     try:
-        ssh_host_port = container_port(container, port_name="22/tcp")
+        ssh_host_port = container_port(container, port_name="2222/tcp")
         wait_for_log_message(container, ".*\\[\\+\\] Starting SSHD.*")
 
         yield container, ssh_host_port
@@ -154,7 +155,7 @@ def docker_container_in_test_mode(mock_server):
         DOCKER_IMAGE_FQN,
         detach=True,
         auto_remove=True,
-        ports={"22/tcp": None},
+        ports={"2222/tcp": None},
         environment={
             "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080",
             "NETWATCH_TEST_MODE": "true"
@@ -166,7 +167,7 @@ def docker_container_in_test_mode(mock_server):
         time.sleep(2)
 
         container.reload()
-        ssh_host_port = container.attrs['NetworkSettings']['Ports']['22/tcp'][0]['HostPort']
+        ssh_host_port = container.attrs['NetworkSettings']['Ports']['2222/tcp'][0]['HostPort']
 
         logging.info(f"Docker container is exposing SSH on port {ssh_host_port} on the host.")
 
@@ -218,13 +219,13 @@ def ssh_connect_and_validate(mock_server, docker_container, username, password, 
     logged_requests = response.json()
     logging.debug(f"Logged requests: {json.dumps(logged_requests, indent=2)}")
 
-    # Filter for POST requests to /add_attack
+    # Filter for POST requests to /v2/add_attack/ssh_bruteforce
     post_requests = [
         req for req in logged_requests
-        if req.get("method") == "POST" and req.get("path") == "/add_attack"
+        if req.get("method") == "POST" and req.get("path") == "/v2/add_attack/ssh_bruteforce"
     ]
 
-    assert len(post_requests) > 0, "No POST request to /add_attack was logged."
+    assert len(post_requests) > 0, "No POST request to /v2/add_attack/ssh_bruteforce was logged."
     last_post_request = post_requests[-1]
 
     # Check the payload of the first POST request
@@ -232,14 +233,15 @@ def ssh_connect_and_validate(mock_server, docker_container, username, password, 
     logging.debug(f"Request payload: {request_payload}")
 
     for key, expected_value in expected_payload.items():
-        actual_value = str(request_payload.get(key))
+        actual_value = request_payload.get(key)
 
-        # Match using regex if the expected value is a regex pattern
-        if isinstance(expected_value, str) and expected_value.startswith('^'):
-            if not re.match(expected_value, actual_value):
+        if isinstance(expected_value, dict):
+            assert actual_value == expected_value, f"Expected value for '{key}' to be '{expected_value}', but got '{actual_value}'"
+        elif isinstance(expected_value, str) and expected_value.startswith('^'):
+            if not re.match(expected_value, str(actual_value)):
                 pytest.fail(f"Expected value for '{key}' to match '{expected_value}', but got '{actual_value}'")
         else:
-            if actual_value != str(expected_value):
+            if str(actual_value) != str(expected_value):
                 pytest.fail(f"Expected value for '{key}' to be '{expected_value}', but got '{actual_value}'")
 
     # Validate headers
@@ -257,12 +259,14 @@ def generate_expected_payload(username, password):
     ip_pattern = r"|".join([re.escape(ip) for ip in source_ips])
 
     return {
-        "source_ip": rf"^{ip_pattern}$",
-        "destination_ip": "111.222.33.44",
-        "username": username,
-        "password": password,
+        "source": rf"^{ip_pattern}$",
+        "destination": "111.222.33.44",
         "attack_type": "SSH_BRUTE_FORCE",
-        "test_mode": False
+        "test_mode": False,
+        "metadata": {
+            "username": username,
+            "password": password
+        }
     }
 
 

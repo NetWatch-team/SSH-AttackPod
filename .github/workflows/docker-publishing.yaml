@@ -12,6 +12,8 @@
 ###
 name: Multi arch container image build
 on:
+  repository_dispatch:
+    types: [openssh-updated]
   workflow_dispatch:
     inputs:
       image_tag_version:
@@ -49,7 +51,10 @@ jobs:
           run: |
             version=""
             overwrite_latest=""
-            if [ -n "${{ github.event.inputs.image_tag_version }}" ]; then
+            if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+                version="${{ github.event.client_payload.version }}"
+                overwrite_latest="true"
+            elif [ -n "${{ github.event.inputs.image_tag_version }}" ]; then
                 # use input string as version
                 version="${{ github.event.inputs.image_tag_version }}"
                 overwrite_latest="${{ github.event.inputs.override_latest }}"

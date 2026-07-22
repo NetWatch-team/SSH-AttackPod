@@ -83,7 +83,8 @@ def get_local_ip():
 
 def submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP):
     # Check if source or destination is a private/local IP (RFC 1918 filtering)
-    if is_private_ip(ip) or is_private_ip(ATTACKPOD_LOCAL_IP):
+    allow_private = _check_if_in_test_mode() or get_env("NETWATCH_ALLOW_PRIVATE_IPS", "false").lower() == "true"
+    if not allow_private and (is_private_ip(ip) or is_private_ip(ATTACKPOD_LOCAL_IP)):
         logging.info(f"Skipping attack from/to private IP - Source: {ip}, Destination: {ATTACKPOD_LOCAL_IP}, User: {user}")
         return
 
@@ -212,7 +213,7 @@ if __name__ == '__main__':
                 continue
 
             logging.debug("Captured a new line from sshd: {}".format(line))
-            output = re.findall("Login attempt by username '(.*)', password '(.*)', from ip '(\d.*)'", line)
+            output = re.findall(r"Login attempt by username '(.*)', password '(.*)', from ip '(\d.*)'", line)
 
             if len(output) == 1:
                 # if the regex has a match it's the patched debug message

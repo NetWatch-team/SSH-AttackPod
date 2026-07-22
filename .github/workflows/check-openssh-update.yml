@@ -1,0 +1,46 @@
+name: Check OpenSSH Updates
+
+on:
+  schedule:
+    # Run daily at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Fetch Latest OpenSSH Version
+        id: check_version
+        run: |
+          # Query Ubuntu package index for latest openssh-server version
+          LATEST_VER=$(curl -s https://packages.ubuntu.com/noble/openssh-server | grep -oP 'Package: openssh-server \(\K[^\)]+' | head -n 1)
+          if [ -z "$LATEST_VER" ]; then
+            echo "Failed to retrieve OpenSSH version"
+            exit 1
+          fi
+          echo "latest_version=$LATEST_VER" >> $GITHUB_OUTPUT
+          echo "Latest available OpenSSH version: $LATEST_VER"
+
+      - name: Compare with Stored Version Tag
+        id: compare
+        run: |
+          CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
+          echo "Current tag: $CURRENT_TAG"
+          
+          if [ "${{ steps.check_version.outputs.latest_version }}" != "$CURRENT_TAG" ]; then
+            echo "should_trigger=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_trigger=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger Build Workflow
+        if: steps.compare.outputs.should_trigger == 'true'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: openssh-updated
+          client-payload: '{"version": "${{ steps.check_version.outputs.latest_version }}"}'
