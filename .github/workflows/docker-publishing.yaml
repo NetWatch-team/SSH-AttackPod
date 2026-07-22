@@ -1,14 +1,18 @@
 ###
 ### This workflow creates container images for
 ###     * amd64
-###     * arm64
+###     * arm64 (Raspberry Pi 3/4/5 64-bit)
+###     * armv7 (Raspberry Pi 2/3/4 32-bit)
 ### architectures.
 ###
-### It's triggered either manually by a workflow_dispatch using GitHub Actions UI or automatically when a new GitHub release is created.
+### It's triggered either manually by a workflow_dispatch using GitHub Actions UI,
+### automatically when a new GitHub release is created, or when openssh is updated.
 ###
-### Resulting container images are named as follows:
-###     ghcr.io/{lowercase github org name}/{lowercase github repo name}:{version}-{architecture}
-### with {version} taken from workflow_dispatch input or the Git tag name of a GitHub release.
+### Resulting container images are published to both GHCR and Docker Hub:
+###     ghcr.io/{org}/{repo}:{version}-{architecture}
+###     ghcr.io/{org}/{repo}:latest-{architecture}
+###     netwatchteam/netwatch_ssh-attackpod:{version}-{architecture}
+###     netwatchteam/netwatch_ssh-attackpod:latest-{architecture}
 ###
 name: Multi arch container image build
 on:
@@ -22,7 +26,7 @@ on:
       override_latest:
         required: true
         description: Whether the resulting image should overwrite the "latest" tags
-        default: "false"
+        default: "true"
 
   release:
     types: [released]
@@ -31,81 +35,95 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
-        matrix:
-            include:
-                - arch: amd64
-                - arch: arm64
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+          - arch: armv7
+            platform: linux/arm/v7
     steps:
-        - name: Checkout Code
-          uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-        - name: Set up QEMU
-          uses: docker/setup-qemu-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-        - name: Set up Docker Buildx
-          uses: docker/setup-buildx-action@v3
-          with:
-            platforms: linux/${{ matrix.arch }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: ${{ matrix.platform }}
 
-        - name: Build image repo name
-          run: |
-            version=""
-            overwrite_latest=""
-            if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-                version="${{ github.event.client_payload.version }}"
-                overwrite_latest="true"
-            elif [ -n "${{ github.event.inputs.image_tag_version }}" ]; then
-                # use input string as version
-                version="${{ github.event.inputs.image_tag_version }}"
-                overwrite_latest="${{ github.event.inputs.override_latest }}"
-            else
-                # use git tag as version
-                version="${{ github.ref_name }}"
-                overwrite_latest="true"
-            fi
+      - name: Build image repo name
+        run: |
+          version=""
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+              version="${{ github.event.client_payload.version }}"
+          elif [ -n "${{ github.event.inputs.image_tag_version }}" ]; then
+              version="${{ github.event.inputs.image_tag_version }}"
+          else
+              version="${{ github.ref_name }}"
+          fi
 
-            if [ -z "$version" ] || [ -z "$overwrite_latest" ]; then
-                echo "Image tag version or overwrite_latest flag could not be determined"
-                exit 1
-            fi
+          if [ -z "$version" ]; then
+              echo "Image tag version could not be determined"
+              exit 1
+          fi
 
-            repo="${{ github.repository }}"
-            echo VERSIONED_IMAGE_FQN="ghcr.io/${repo,,}:$version-${{ matrix.arch }}" >> $GITHUB_ENV
-            echo LATEST_IMAGE_FQN="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
-            echo OVERWRITE_LATEST="$overwrite_latest" >> $GITHUB_ENV
+          repo="${{ github.repository }}"
+          echo VERSIONED_GHCR_IMAGE="ghcr.io/${repo,,}:$version-${{ matrix.arch }}" >> $GITHUB_ENV
+          echo LATEST_GHCR_IMAGE="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
+          echo VERSIONED_DOCKERHUB_IMAGE="netwatchteam/netwatch_ssh-attackpod:$version-${{ matrix.arch }}" >> $GITHUB_ENV
+          echo LATEST_DOCKERHUB_IMAGE="netwatchteam/netwatch_ssh-attackpod:latest-${{ matrix.arch }}" >> $GITHUB_ENV
 
-        - name: Docker build
-          uses: docker/build-push-action@v6
-          with:
-            context: src
-            file: src/Dockerfile
-            platforms: linux/${{ matrix.arch }}
-            tags: |
-              ${{ env.VERSIONED_IMAGE_FQN }}
-              ${{ env.LATEST_IMAGE_FQN }}
-            load: true
-            push: false
+      - name: Docker build
+        uses: docker/build-push-action@v6
+        with:
+          context: src
+          file: src/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: |
+            ${{ env.VERSIONED_GHCR_IMAGE }}
+            ${{ env.LATEST_GHCR_IMAGE }}
+            ${{ env.VERSIONED_DOCKERHUB_IMAGE }}
+            ${{ env.LATEST_DOCKERHUB_IMAGE }}
+          load: true
+          push: false
 
-        - name: Run integration tests
-          env:
-            DOCKER_IMAGE_FQN: ${{ env.VERSIONED_IMAGE_FQN }}
-          run: |
-            # Install dependencies
-            python -m pip install --upgrade pip
-            pip install -r tests/requirements.txt
+      - name: Run integration tests
+        env:
+          DOCKER_IMAGE_FQN: ${{ env.VERSIONED_GHCR_IMAGE }}
+        run: |
+          # Install dependencies
+          python -m pip install --upgrade pip
+          pip install -r tests/requirements.txt
 
-            # Run python based integration tests via pytest
-            pytest tests/
+          # Run python based integration tests via pytest
+          pytest tests/
 
-        - name: Login to GHCR
-          uses: docker/login-action@v3
-          with:
-            registry: ghcr.io
-            username: ${{ github.actor }}
-            password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-        - name: Docker push to GHCR
-          run: |
-            # upload images (both version tag and latest tag)
-            docker push "$VERSIONED_IMAGE_FQN"
-            docker push "$LATEST_IMAGE_FQN"
+      - name: Login to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker push to GHCR and Docker Hub
+        run: |
+          # Push to GHCR
+          docker push "$VERSIONED_GHCR_IMAGE"
+          docker push "$LATEST_GHCR_IMAGE"
+
+          # Push to Docker Hub if logged in
+          if docker info | grep -q "Username"; then
+            docker push "$VERSIONED_DOCKERHUB_IMAGE"
+            docker push "$LATEST_DOCKERHUB_IMAGE"
+          fi
