@@ -1,18 +1,13 @@
 ###
-### This workflow creates container images for
-###     * amd64
-###     * arm64 (Raspberry Pi 3/4/5 64-bit)
-###     * armv7 (Raspberry Pi 2/3/4 32-bit)
-### architectures.
+### This workflow builds true multi-platform container images for:
+###     * linux/amd64 (x86_64 servers)
+###     * linux/arm64 (Raspberry Pi 3/4/5 64-bit)
+###     * linux/arm/v7 (Raspberry Pi 2/3/4 32-bit)
 ###
-### It's triggered either manually by a workflow_dispatch using GitHub Actions UI,
-### automatically when a new GitHub release is created, or when openssh is updated.
-###
-### Resulting container images are published to both GHCR and Docker Hub:
-###     ghcr.io/{org}/{repo}:{version}-{architecture}
-###     ghcr.io/{org}/{repo}:latest-{architecture}
-###     netwatchteam/netwatch_ssh-attackpod:{version}-{architecture}
-###     netwatchteam/netwatch_ssh-attackpod:latest-{architecture}
+### It is triggered manually by workflow_dispatch, on release, or via openssh-updated event.
+### Multi-arch manifest lists are published to both GHCR and Docker Hub:
+###     ghcr.io/{org}/{repo}:latest & {version}
+###     netwatchteam/netwatch_ssh-attackpod:latest & {version}
 ###
 name: Multi arch container image build
 on:
@@ -32,17 +27,38 @@ on:
     types: [released]
 
 jobs:
-  build:
+  test:
+    name: Integration Tests (amd64)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-          - arch: arm64
-            platform: linux/arm64
-          - arch: armv7
-            platform: linux/arm/v7
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build local amd64 image for integration tests
+        uses: docker/build-push-action@v6
+        with:
+          context: src
+          file: src/Dockerfile
+          platforms: linux/amd64
+          tags: netwatch_ssh-attackpod:test
+          load: true
+          push: false
+
+      - name: Run integration tests
+        env:
+          DOCKER_IMAGE_FQN: netwatch_ssh-attackpod:test
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/requirements.txt
+          pytest tests/
+
+  publish:
+    name: Build & Push Multi-Platform Manifests
+    needs: test
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -52,10 +68,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          platforms: ${{ matrix.platform }}
 
-      - name: Build image repo name
+      - name: Determine Image Version
+        id: meta
         run: |
           version=""
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
@@ -72,35 +87,8 @@ jobs:
           fi
 
           repo="${{ github.repository }}"
-          echo VERSIONED_GHCR_IMAGE="ghcr.io/${repo,,}:$version-${{ matrix.arch }}" >> $GITHUB_ENV
-          echo LATEST_GHCR_IMAGE="ghcr.io/${repo,,}:latest-${{ matrix.arch }}" >> $GITHUB_ENV
-          echo VERSIONED_DOCKERHUB_IMAGE="netwatchteam/netwatch_ssh-attackpod:$version-${{ matrix.arch }}" >> $GITHUB_ENV
-          echo LATEST_DOCKERHUB_IMAGE="netwatchteam/netwatch_ssh-attackpod:latest-${{ matrix.arch }}" >> $GITHUB_ENV
-
-      - name: Docker build
-        uses: docker/build-push-action@v6
-        with:
-          context: src
-          file: src/Dockerfile
-          platforms: ${{ matrix.platform }}
-          tags: |
-            ${{ env.VERSIONED_GHCR_IMAGE }}
-            ${{ env.LATEST_GHCR_IMAGE }}
-            ${{ env.VERSIONED_DOCKERHUB_IMAGE }}
-            ${{ env.LATEST_DOCKERHUB_IMAGE }}
-          load: true
-          push: false
-
-      - name: Run integration tests
-        env:
-          DOCKER_IMAGE_FQN: ${{ env.VERSIONED_GHCR_IMAGE }}
-        run: |
-          # Install dependencies
-          python -m pip install --upgrade pip
-          pip install -r tests/requirements.txt
-
-          # Run python based integration tests via pytest
-          pytest tests/
+          echo "VERSION=$version" >> $GITHUB_OUTPUT
+          echo "REPO_LOWER=${repo,,}" >> $GITHUB_OUTPUT
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -116,14 +104,15 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Docker push to GHCR and Docker Hub
-        run: |
-          # Push to GHCR
-          docker push "$VERSIONED_GHCR_IMAGE"
-          docker push "$LATEST_GHCR_IMAGE"
-
-          # Push to Docker Hub if logged in
-          if docker info | grep -q "Username"; then
-            docker push "$VERSIONED_DOCKERHUB_IMAGE"
-            docker push "$LATEST_DOCKERHUB_IMAGE"
-          fi
+      - name: Build and Push Multi-Platform Manifest Index
+        uses: docker/build-push-action@v6
+        with:
+          context: src
+          file: src/Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.REPO_LOWER }}:${{ steps.meta.outputs.VERSION }}
+            ghcr.io/${{ steps.meta.outputs.REPO_LOWER }}:latest
+            netwatchteam/netwatch_ssh-attackpod:${{ steps.meta.outputs.VERSION }}
+            netwatchteam/netwatch_ssh-attackpod:latest
