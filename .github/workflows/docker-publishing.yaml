@@ -96,12 +96,12 @@ jobs:
           repo="${{ github.repository }}"
           repo_lower="${repo,,}"
 
-          # Safely evaluate Docker Hub secret credentials without boolean 'false' string contamination
-          DH_USER="${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKER_HUB_USERNAME || secrets.DOCKER_USERNAME }}"
-          DH_TOKEN="${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_HUB_TOKEN || secrets.DOCKER_PASSWORD }}"
+          # Evaluate Docker Hub secret credentials
+          DH_USER="${{ secrets.DOCKERHUB_USERNAME }}"
+          DH_TOKEN="${{ secrets.DOCKERHUB_TOKEN }}"
 
           has_dh="false"
-          if [ -n "$DH_USER" ] && [ "$DH_USER" != "false" ] && [ -n "$DH_TOKEN" ] && [ "$DH_TOKEN" != "false" ]; then
+          if [ -n "$DH_USER" ] && [ -n "$DH_TOKEN" ]; then
               has_dh="true"
           fi
 
@@ -129,7 +129,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: ${{ steps.meta.outputs.dh_username }}
-          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_HUB_TOKEN || secrets.DOCKER_PASSWORD }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and Push Multi-Platform Manifest Index
         uses: docker/build-push-action@v6
