@@ -6,6 +6,9 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -45,6 +48,6 @@ jobs:
         if: steps.compare.outputs.should_trigger == 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.PAT_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
           event-type: openssh-updated
           client-payload: '{"version": "${{ steps.check_version.outputs.latest_version }}"}'
