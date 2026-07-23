@@ -64,9 +64,6 @@ jobs:
     name: Build & Push Multi-Platform Manifests
     needs: test
     runs-on: ubuntu-latest
-    env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKER_HUB_USERNAME || secrets.DOCKER_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_HUB_TOKEN || secrets.DOCKER_PASSWORD }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -99,12 +96,26 @@ jobs:
           repo="${{ github.repository }}"
           repo_lower="${repo,,}"
 
-          tags="ghcr.io/${repo_lower}:${version},ghcr.io/${repo_lower}:latest"
-          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
-              tags="${tags},netwatchteam/netwatch_ssh-attackpod:${version},netwatchteam/netwatch_ssh-attackpod:latest"
+          # Safely evaluate Docker Hub secret credentials without boolean 'false' string contamination
+          DH_USER="${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKER_HUB_USERNAME || secrets.DOCKER_USERNAME }}"
+          DH_TOKEN="${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_HUB_TOKEN || secrets.DOCKER_PASSWORD }}"
+
+          has_dh="false"
+          if [ -n "$DH_USER" ] && [ "$DH_USER" != "false" ] && [ -n "$DH_TOKEN" ] && [ "$DH_TOKEN" != "false" ]; then
+              has_dh="true"
           fi
 
-          echo "TAGS=${tags}" >> $GITHUB_OUTPUT
+          echo "has_dockerhub=${has_dh}" >> $GITHUB_OUTPUT
+          echo "dh_username=${DH_USER}" >> $GITHUB_OUTPUT
+
+          echo "TAGS<<EOF" >> $GITHUB_OUTPUT
+          echo "ghcr.io/${repo_lower}:${version}" >> $GITHUB_OUTPUT
+          echo "ghcr.io/${repo_lower}:latest" >> $GITHUB_OUTPUT
+          if [ "$has_dh" = "true" ]; then
+              echo "netwatchteam/netwatch_ssh-attackpod:${version}" >> $GITHUB_OUTPUT
+              echo "netwatchteam/netwatch_ssh-attackpod:latest" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -114,11 +125,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        if: steps.meta.outputs.has_dockerhub == 'true'
         uses: docker/login-action@v3
         with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          username: ${{ steps.meta.outputs.dh_username }}
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_HUB_TOKEN || secrets.DOCKER_PASSWORD }}
 
       - name: Build and Push Multi-Platform Manifest Index
         uses: docker/build-push-action@v6
