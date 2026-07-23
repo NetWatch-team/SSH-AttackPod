@@ -142,7 +142,6 @@ def reap_children(signum, frame):
             pid, _ = os.waitpid(-1, os.WNOHANG)
             if pid == 0:
                 break
-            logging.info(f"Reaped child process with PID {pid}")
     except ChildProcessError:
         pass
 
