@@ -76,6 +76,9 @@ jobs:
 
       - name: Determine Image Version & Tags
         id: meta
+        env:
+          DH_USER_RAW: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN_RAW: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           version=""
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
@@ -96,17 +99,19 @@ jobs:
           repo="${{ github.repository }}"
           repo_lower="${repo,,}"
 
-          # Evaluate Docker Hub secret credentials
-          DH_USER="${{ secrets.DOCKERHUB_USERNAME }}"
-          DH_TOKEN="${{ secrets.DOCKERHUB_TOKEN }}"
+          # Clean and sanitize Docker Hub secret credentials (strip newlines, carriage returns, leading/trailing spaces, and header prefixes)
+          DH_USER=$(echo -n "$DH_USER_RAW" | tr -d '\r\n' | xargs)
+          DH_TOKEN=$(echo -n "$DH_TOKEN_RAW" | tr -d '\r\n' | sed -E 's/^(Bearer|Basic)[[:space:]]+//i' | xargs)
 
           has_dh="false"
           if [ -n "$DH_USER" ] && [ -n "$DH_TOKEN" ]; then
               has_dh="true"
+              echo "::add-mask::$DH_TOKEN"
           fi
 
           echo "has_dockerhub=${has_dh}" >> $GITHUB_OUTPUT
           echo "dh_username=${DH_USER}" >> $GITHUB_OUTPUT
+          echo "dh_token=${DH_TOKEN}" >> $GITHUB_OUTPUT
 
           echo "TAGS<<EOF" >> $GITHUB_OUTPUT
           echo "ghcr.io/${repo_lower}:${version}" >> $GITHUB_OUTPUT
@@ -129,7 +134,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: ${{ steps.meta.outputs.dh_username }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          password: ${{ steps.meta.outputs.dh_token }}
 
       - name: Build and Push Multi-Platform Manifest Index
         uses: docker/build-push-action@v6
