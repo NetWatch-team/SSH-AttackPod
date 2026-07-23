@@ -27,6 +27,10 @@ on:
   release:
     types: [released]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   test:
     name: Integration Tests (amd64)
@@ -61,8 +65,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKER_HUB_USERNAME || secrets.DOCKER_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_HUB_TOKEN || secrets.DOCKER_PASSWORD }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -88,6 +92,9 @@ jobs:
           if [ -z "$version" ]; then
               version="9.6"
           fi
+
+          # Sanitize version string for valid Docker tag syntax
+          version=$(echo "$version" | sed -E 's/^[0-9]+://; s/[^a-zA-Z0-9_.-]/_/g')
 
           repo="${{ github.repository }}"
           repo_lower="${repo,,}"
