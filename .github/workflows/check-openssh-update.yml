@@ -63,7 +63,7 @@ jobs:
           fi
 
       - name: Dispatch Build Event
-        if: steps.compare.outputs.should_trigger == 'true'
+        if: success() && steps.compare.outputs.should_trigger == 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PAT_TOKEN }}
