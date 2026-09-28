@@ -35,10 +35,18 @@ jobs:
       - name: Compare with Stored Version Tag
         id: compare
         run: |
+          LATEST_VER="${{ steps.check_version.outputs.latest_version }}"
           CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
           echo "Current tag: $CURRENT_TAG"
-          
-          if [ "${{ steps.check_version.outputs.latest_version }}" != "$CURRENT_TAG" ]; then
+          echo "Latest upstream version: $LATEST_VER"
+
+          # Extract the base OpenSSH version (e.g. "9.6" from "9.6p1" or "9.6_v2")
+          # so that tag naming conventions don't cause false positives.
+          LATEST_BASE=$(echo "$LATEST_VER" | grep -oP '^\d+\.\d+')
+          CURRENT_BASE=$(echo "$CURRENT_TAG" | grep -oP '^\d+\.\d+')
+          echo "Comparing base versions: upstream=$LATEST_BASE vs current=$CURRENT_BASE"
+
+          if [ -z "$CURRENT_BASE" ] || [ "$LATEST_BASE" != "$CURRENT_BASE" ]; then
             echo "should_trigger=true" >> $GITHUB_OUTPUT
           else
             echo "should_trigger=false" >> $GITHUB_OUTPUT
@@ -46,8 +54,18 @@ jobs:
 
       - name: Trigger Build Workflow
         if: steps.compare.outputs.should_trigger == 'true'
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          if [ -z "$PAT_TOKEN" ]; then
+            echo "::warning::PAT_TOKEN secret is not set. Cannot trigger repository_dispatch (GITHUB_TOKEN lacks the required scope). Please add a PAT_TOKEN secret with repo scope."
+            exit 1
+          fi
+
+      - name: Dispatch Build Event
+        if: steps.compare.outputs.should_trigger == 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
           event-type: openssh-updated
           client-payload: '{"version": "${{ steps.check_version.outputs.latest_version }}"}'
