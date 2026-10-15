@@ -337,6 +337,28 @@ async def sync_fingerprints_bundle(admission_engine: AdmissionEngine):
         await asyncio.sleep(300)
 
 
+async def sync_accepted_credentials(admission_engine: AdmissionEngine):
+    """Background task syncing accepted credentials from Collector."""
+    while True:
+        try:
+            url = f"{COLLECTOR_URL}/v2/sandbox/accepted_credentials"
+            headers = {"Authorization": COLLECTOR_AUTH}
+            resp = requests.get(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                creds = data.get("accepted_credentials", [])
+                for c in creds:
+                    admission_engine.add_accepted_credential(
+                        c["username"],
+                        c["password"],
+                        c.get("origin_attackgroup_uuid"),
+                        c.get("origin_attackcluster_uuid")
+                    )
+        except Exception as e:
+            logger.debug(f"Failed to sync accepted credentials from Collector: {e}")
+        await asyncio.sleep(60)
+
+
 async def start_gateway_server():
     os.makedirs(CACHE_DIR, exist_ok=True)
     sqlite_path = os.path.join(CACHE_DIR, "gateway_credentials.db")
@@ -348,8 +370,9 @@ async def start_gateway_server():
     # Load host keys
     host_keys = ensure_host_keys()
 
-    # Start bundle sync loop
+    # Start sync loops
     asyncio.create_task(sync_fingerprints_bundle(admission_engine))
+    asyncio.create_task(sync_accepted_credentials(admission_engine))
 
     logger.info(f"Starting NetWatch SSH-Gateway on {LISTEN_HOST}:{LISTEN_PORT}...")
     server = await asyncssh.create_server(
