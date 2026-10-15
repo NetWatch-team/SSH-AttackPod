@@ -164,7 +164,14 @@ def rotate_sshd_keys():
     os.system("ssh-keygen -t ecdsa -b 521 -f /etc/ssh/ssh_host_ecdsa_key -N ''")
 
 if __name__ == '__main__':
-    logging.info("[+] Starting NetWatch Attackpod")
+    mode = os.getenv("NETWATCH_MODE", "lowint").lower()
+    if mode == "gateway":
+        logging.info("[+] Starting NetWatch Attackpod in GATEWAY mode")
+        import gateway
+        gateway.main()
+        sys.exit(0)
+
+    logging.info("[+] Starting NetWatch Attackpod in LOW-INTERACTION mode")
     
     if _check_if_in_test_mode():
         logging.info("################################")

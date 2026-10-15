@@ -1,1 +1,3 @@
 requests
+asyncssh>=2.15.0
+cryptography>=42.0.0
