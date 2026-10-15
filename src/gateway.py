@@ -88,6 +88,100 @@ def report_bruteforce_attack(src_ip: str, user: str, password: str, dst_ip: str)
         logger.debug(f"Failed to submit bruteforce attack to collector: {e}")
 
 
+class CowrieRelaySession(asyncssh.SSHServerSession):
+    def __init__(self, server: "GatewaySSHServer"):
+        self.server = server
+        self.channel = None
+        self.client_conn = None
+        self.cowrie_process = None
+        self.term_type = "xterm-256color"
+        self.term_size = (80, 24, 0, 0)
+        self.env: Dict[str, str] = {}
+
+    def connection_made(self, chan):
+        self.channel = chan
+
+    def pty_requested(self, term_type, term_size, term_modes):
+        self.term_type = term_type
+        self.term_size = term_size
+        return True
+
+    def env_received(self, name, value):
+        self.env[name] = value
+        return True
+
+    def terminal_size_changed(self, width, height, pixwidth, pixheight):
+        self.term_size = (width, height, pixwidth, pixheight)
+        if self.cowrie_process:
+            self.cowrie_process.change_terminal_size(width, height, pixwidth, pixheight)
+
+    def shell_requested(self):
+        asyncio.create_task(self._start_relay(command=None))
+        return True
+
+    def exec_requested(self, command):
+        asyncio.create_task(self._start_relay(command=command))
+        return True
+
+    async def _start_relay(self, command: Optional[str] = None):
+        try:
+            self.client_conn = await asyncssh.connect(
+                self.server.cowrie_host,
+                port=self.server.cowrie_port,
+                username=self.server.admitted_username or "root",
+                password=self.server.relay_token,
+                known_hosts=None
+            )
+            term_size_pair = (self.term_size[0], self.term_size[1])
+            self.cowrie_process = await self.client_conn.create_process(
+                command=command,
+                term_type=self.term_type,
+                term_size=term_size_pair,
+                env=self.env
+            )
+            asyncio.create_task(self._pipe_cowrie_to_client())
+            await self.cowrie_process.wait()
+            exit_status = self.cowrie_process.exit_status or 0
+            if self.channel:
+                self.channel.exit(exit_status)
+                self.channel.close()
+        except Exception as e:
+            logger.error(f"Relay error to Cowrie: {e}")
+            if self.channel:
+                self.channel.close()
+        finally:
+            if self.client_conn:
+                self.client_conn.close()
+
+    async def _pipe_cowrie_to_client(self):
+        try:
+            while not self.cowrie_process.stdout.at_eof():
+                data = await self.cowrie_process.stdout.read(4096)
+                if not data:
+                    break
+                self.server.bytes_out += len(data)
+                if self.channel:
+                    self.channel.write(data)
+        except Exception:
+            pass
+
+    def data_received(self, data, datatype):
+        self.server.bytes_in += len(data)
+        if self.cowrie_process and not self.cowrie_process.stdin.is_closing():
+            self.cowrie_process.stdin.write(data)
+
+    def eof_received(self):
+        if self.cowrie_process and not self.cowrie_process.stdin.is_closing():
+            self.cowrie_process.stdin.write_eof()
+        return True
+
+    def connection_lost(self, exc):
+        if self.cowrie_process:
+            self.cowrie_process.terminate()
+        if self.client_conn:
+            self.client_conn.close()
+
+
 class GatewaySSHServer(asyncssh.SSHServer):
     def __init__(self, admission_engine: AdmissionEngine, local_ip: str):
         self.engine = admission_engine
@@ -96,6 +190,10 @@ class GatewaySSHServer(asyncssh.SSHServer):
         self.peer_port = 0
         self.admitted_engagement_uuid = None
         self.admitted_metadata = None
+        self.admitted_username = None
+        self.cowrie_host = None
+        self.cowrie_port = None
+        self.relay_token = None
         self.cowrie_client_conn = None
         self.session_start_time = None
         self.bytes_in = 0
@@ -122,6 +220,7 @@ class GatewaySSHServer(asyncssh.SSHServer):
         eng_uuid = str(uuid.uuid4())
         self.admitted_engagement_uuid = eng_uuid
         self.admitted_metadata = meta
+        self.admitted_username = username
         self.session_start_time = time.time()
 
         logger.info(f"Admitting session for {self.peer_ip} (user '{username}'). Engagement UUID: {eng_uuid}")
@@ -197,7 +296,7 @@ class GatewaySSHServer(asyncssh.SSHServer):
 
     def session_requested(self):
         """Allows opening an interactive shell session channel."""
-        return True
+        return CowrieRelaySession(self)
 
     def connection_lost(self, exc):
         """Finalizes engagement metrics on disconnect."""
