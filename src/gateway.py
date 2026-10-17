@@ -13,10 +13,38 @@ import uuid
 import signal
 import asyncio
 import logging
+import ipaddress
 import requests
 from typing import Optional, Dict
 
-import asyncssh
+try:
+    import asyncssh
+except ImportError:  # pragma: no cover - fallback for lightweight unit test runners
+    class _AsyncSSHStub:
+        class SSHServer:
+            pass
+
+        class SSHServerSession:
+            pass
+
+        @staticmethod
+        async def connect(*args, **kwargs):
+            raise RuntimeError("asyncssh is not installed")
+
+        @staticmethod
+        async def create_server(*args, **kwargs):
+            raise RuntimeError("asyncssh is not installed")
+
+        @staticmethod
+        def read_private_key(*args, **kwargs):
+            raise RuntimeError("asyncssh is not installed")
+
+        @staticmethod
+        def generate_private_key(*args, **kwargs):
+            raise RuntimeError("asyncssh is not installed")
+
+    asyncssh = _AsyncSSHStub()
+
 from admission_engine import AdmissionEngine, AdmissionDecision, AdmissionReason
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -40,34 +68,65 @@ MAX_SESSION_SECONDS = int(os.getenv("MAX_SESSION_SECONDS", "900"))
 IDLE_TIMEOUT_SECONDS = int(os.getenv("IDLE_TIMEOUT_SECONDS", "300"))
 
 
+_RFC1918_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def is_private_ip(ip: str) -> bool:
+    """Checks if an IP address is RFC 1918 private, loopback, or link-local (excluding RFC 5737 documentation IPs)."""
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        return (
+            ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or any(ip_obj in net for net in _RFC1918_NETWORKS)
+        )
+    except ValueError:
+        return False
+
+
 def ensure_host_keys():
-    """Generates and persists persistent host keys if not present."""
-    os.makedirs(HOST_KEYS_DIR, exist_ok=True)
+    """Generates and persists persistent host keys with strict 0600 permissions if not present."""
+    os.makedirs(HOST_KEYS_DIR, mode=0o700, exist_ok=True)
     rsa_path = os.path.join(HOST_KEYS_DIR, "ssh_host_rsa_key")
     ed25519_path = os.path.join(HOST_KEYS_DIR, "ssh_host_ed25519_key")
 
     keys = []
     if os.path.exists(rsa_path):
+        os.chmod(rsa_path, 0o600)
         keys.append(asyncssh.read_private_key(rsa_path))
     else:
         logger.info(f"Generating persistent RSA host key at {rsa_path}...")
         key = asyncssh.generate_private_key("ssh-rsa", key_size=3072)
         key.write_private_key(rsa_path)
+        os.chmod(rsa_path, 0o600)
         keys.append(key)
 
     if os.path.exists(ed25519_path):
+        os.chmod(ed25519_path, 0o600)
         keys.append(asyncssh.read_private_key(ed25519_path))
     else:
         logger.info(f"Generating persistent Ed25519 host key at {ed25519_path}...")
         key = asyncssh.generate_private_key("ssh-ed25519")
         key.write_private_key(ed25519_path)
+        os.chmod(ed25519_path, 0o600)
         keys.append(key)
 
     return keys
 
 
 def report_bruteforce_attack(src_ip: str, user: str, password: str, dst_ip: str):
-    """Submits standard low-interaction brute-force payload to Collector 2.0."""
+    """Submits standard low-interaction brute-force payload to Collector 2.0 without logging cleartext passwords."""
+    test_mode = os.getenv("NETWATCH_TEST_MODE", "false").lower() != "false"
+    allow_private = test_mode or os.getenv("NETWATCH_ALLOW_PRIVATE_IPS", "false").lower() == "true"
+    if not allow_private and (is_private_ip(src_ip) or is_private_ip(dst_ip)):
+        logger.debug(f"Skipping brute-force report from/to private IP (src={src_ip}, dst={dst_ip})")
+        return
+
     url = f"{COLLECTOR_URL}/v2/add_attack/ssh_bruteforce"
     headers = {"Authorization": COLLECTOR_AUTH, "Content-Type": "application/json"}
     payload = {
@@ -78,7 +137,7 @@ def report_bruteforce_attack(src_ip: str, user: str, password: str, dst_ip: str)
         "destination": dst_ip,
         "attack_type": "SSH_BRUTE_FORCE",
         "source_type": "IP",
-        "test_mode": False,
+        "test_mode": test_mode,
         "evidence": f"Failed password attempt for {user} from {src_ip}",
         "metadata": {"username": user, "password": password}
     }
@@ -89,21 +148,37 @@ def report_bruteforce_attack(src_ip: str, user: str, password: str, dst_ip: str)
 
 
 class CowrieRelaySession(asyncssh.SSHServerSession):
-    def __init__(self, server: "GatewaySSHServer"):
+    def __init__(
+        self,
+        server: "GatewaySSHServer",
+        max_session_seconds: int = MAX_SESSION_SECONDS,
+        idle_timeout_seconds: int = IDLE_TIMEOUT_SECONDS,
+    ):
         self.server = server
+        self.max_session_seconds = max_session_seconds
+        self.idle_timeout_seconds = idle_timeout_seconds
         self.channel = None
         self.client_conn = None
         self.cowrie_process = None
         self.term_type = "xterm-256color"
         self.term_size = (80, 24, 0, 0)
+        self.pty_enabled = False
         self.env: Dict[str, str] = {}
+        self.last_activity = time.monotonic()
+        self._relay_task: Optional[asyncio.Task] = None
+        self._stdout_task: Optional[asyncio.Task] = None
+        self._stderr_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._closed = False
 
     def connection_made(self, chan):
         self.channel = chan
+        self.last_activity = time.monotonic()
 
     def pty_requested(self, term_type, term_size, term_modes):
         self.term_type = term_type
         self.term_size = term_size
+        self.pty_enabled = True
         return True
 
     def env_received(self, name, value):
@@ -116,15 +191,41 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
             self.cowrie_process.change_terminal_size(width, height, pixwidth, pixheight)
 
     def shell_requested(self):
-        asyncio.create_task(self._start_relay(command=None))
+        self._relay_task = asyncio.create_task(self._start_relay(command=None))
         return True
 
     def exec_requested(self, command):
-        asyncio.create_task(self._start_relay(command=command))
+        self._relay_task = asyncio.create_task(self._start_relay(command=command))
         return True
+
+    async def _idle_watchdog(self):
+        """Terminates the relay session if idle beyond idle_timeout_seconds."""
+        check_interval = min(1.0, max(0.05, self.idle_timeout_seconds / 4.0))
+        try:
+            while not self._closed:
+                await asyncio.sleep(check_interval)
+                if (time.monotonic() - self.last_activity) >= self.idle_timeout_seconds:
+                    logger.info(
+                        f"Session {self.server.admitted_engagement_uuid} exceeded idle timeout "
+                        f"({self.idle_timeout_seconds}s); terminating relay."
+                    )
+                    if self.cowrie_process:
+                        try:
+                            self.cowrie_process.terminate()
+                        except Exception:
+                            pass
+                    if self.channel:
+                        try:
+                            self.channel.close()
+                        except Exception:
+                            pass
+                    break
+        except asyncio.CancelledError:
+            pass
 
     async def _start_relay(self, command: Optional[str] = None):
         try:
+            self.last_activity = time.monotonic()
             self.client_conn = await asyncssh.connect(
                 self.server.cowrie_host,
                 port=self.server.cowrie_port,
@@ -135,37 +236,99 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
             term_size_pair = (self.term_size[0], self.term_size[1])
             self.cowrie_process = await self.client_conn.create_process(
                 command=command,
-                term_type=self.term_type,
-                term_size=term_size_pair,
+                term_type=self.term_type if (self.pty_enabled or command is None) else None,
+                term_size=term_size_pair if (self.pty_enabled or command is None) else None,
                 env=self.env
             )
-            asyncio.create_task(self._pipe_cowrie_to_client())
-            await self.cowrie_process.wait()
+            self._stdout_task = asyncio.create_task(self._pipe_cowrie_to_client())
+            self._stderr_task = asyncio.create_task(self._pipe_cowrie_stderr_to_client())
+            self._watchdog_task = asyncio.create_task(self._idle_watchdog())
+
+            await asyncio.wait_for(
+                self.cowrie_process.wait(),
+                timeout=self.max_session_seconds
+            )
+            if self._stdout_task:
+                await asyncio.gather(self._stdout_task, return_exceptions=True)
+            if self._stderr_task:
+                await asyncio.gather(self._stderr_task, return_exceptions=True)
+
             exit_status = self.cowrie_process.exit_status or 0
-            if self.channel:
+            if self.channel and not self._closed:
                 self.channel.exit(exit_status)
+                self.channel.close()
+        except asyncio.TimeoutError:
+            logger.info(
+                f"Session {self.server.admitted_engagement_uuid} reached max session duration "
+                f"({self.max_session_seconds}s); closing relay."
+            )
+            if self.channel and not self._closed:
                 self.channel.close()
         except Exception as e:
             logger.error(f"Relay error to Cowrie: {e}")
-            if self.channel:
+            if self.channel and not self._closed:
                 self.channel.close()
         finally:
-            if self.client_conn:
+            await self._cleanup_resources()
+
+    async def _cleanup_resources(self):
+        self._closed = True
+        for task in (self._watchdog_task, self._stdout_task, self._stderr_task):
+            if task and not task.done():
+                task.cancel()
+        if self.cowrie_process:
+            try:
+                self.cowrie_process.terminate()
+            except Exception:
+                pass
+        if self.client_conn:
+            try:
                 self.client_conn.close()
+                if hasattr(self.client_conn, "wait_closed"):
+                    res = self.client_conn.wait_closed()
+                    if asyncio.iscoroutine(res):
+                        await res
+            except Exception:
+                pass
 
     async def _pipe_cowrie_to_client(self):
         try:
-            while not self.cowrie_process.stdout.at_eof():
+            while self.cowrie_process and not self.cowrie_process.stdout.at_eof():
                 data = await self.cowrie_process.stdout.read(4096)
                 if not data:
                     break
+                self.last_activity = time.monotonic()
                 self.server.bytes_out += len(data)
-                if self.channel:
+                if self.channel and not self._closed:
                     self.channel.write(data)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
+    async def _pipe_cowrie_stderr_to_client(self):
+        try:
+            stderr = getattr(self.cowrie_process, "stderr", None)
+            if stderr is None:
+                return
+            while self.cowrie_process and not stderr.at_eof():
+                data = await stderr.read(4096)
+                if not data:
+                    break
+                self.last_activity = time.monotonic()
+                self.server.bytes_out += len(data)
+                if self.channel and not self._closed:
+                    if hasattr(self.channel, "write_stderr"):
+                        self.channel.write_stderr(data)
+                    else:
+                        self.channel.write(data)
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
 
     def data_received(self, data, datatype):
+        self.last_activity = time.monotonic()
         self.server.bytes_in += len(data)
         if self.cowrie_process and not self.cowrie_process.stdin.is_closing():
             self.cowrie_process.stdin.write(data)
@@ -176,10 +339,20 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
         return True
 
     def connection_lost(self, exc):
+        self._closed = True
+        for task in (self._watchdog_task, self._stdout_task, self._stderr_task, self._relay_task):
+            if task and not task.done():
+                task.cancel()
         if self.cowrie_process:
-            self.cowrie_process.terminate()
+            try:
+                self.cowrie_process.terminate()
+            except Exception:
+                pass
         if self.client_conn:
-            self.client_conn.close()
+            try:
+                self.client_conn.close()
+            except Exception:
+                pass
 
 
 class GatewaySSHServer(asyncssh.SSHServer):
@@ -322,39 +495,53 @@ class GatewaySSHServer(asyncssh.SSHServer):
                 logger.error(f"Failed to finalize engagement in Collector: {e}")
 
 
-async def sync_fingerprints_bundle(admission_engine: AdmissionEngine):
+async def sync_fingerprints_bundle(admission_engine: AdmissionEngine, stop_event: Optional[asyncio.Event] = None):
     """Background task syncing the cluster fingerprint bundle from Collector every 5 minutes."""
-    while True:
+    while stop_event is None or not stop_event.is_set():
         try:
             url = f"{COLLECTOR_URL}/v2/sandbox/fingerprints"
             headers = {"Authorization": COLLECTOR_AUTH}
-            resp = requests.get(url, headers=headers, timeout=5)
+            resp = await asyncio.to_thread(requests.get, url, headers=headers, timeout=5)
             if resp.status_code == 200:
                 bundle = resp.json()
                 admission_engine.load_bundle(bundle)
         except Exception as e:
             logger.debug(f"Failed to sync fingerprint bundle from Collector: {e}")
-        await asyncio.sleep(300)
+        if stop_event is not None:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=300)
+                break
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(300)
 
 
-async def sync_accepted_credentials(admission_engine: AdmissionEngine):
+async def sync_accepted_credentials(admission_engine: AdmissionEngine, stop_event: Optional[asyncio.Event] = None):
     """Background task syncing accepted credentials from Collector."""
-    while True:
+    while stop_event is None or not stop_event.is_set():
         try:
             url = f"{COLLECTOR_URL}/v2/sandbox/accepted_credentials"
             headers = {"Authorization": COLLECTOR_AUTH}
-            resp = requests.get(url, headers=headers, timeout=5)
+            resp = await asyncio.to_thread(requests.get, url, headers=headers, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
                 creds = data.get("accepted_credentials", [])
                 admission_engine.sync_accepted_credentials_list(creds)
         except Exception as e:
             logger.debug(f"Failed to sync accepted credentials from Collector: {e}")
-        await asyncio.sleep(60)
+        if stop_event is not None:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=60)
+                break
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(60)
 
 
 async def start_gateway_server():
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
     sqlite_path = os.path.join(CACHE_DIR, "gateway_credentials.db")
     admission_engine = AdmissionEngine(sqlite_db_path=sqlite_path)
 
@@ -364,9 +551,17 @@ async def start_gateway_server():
     # Load host keys
     host_keys = ensure_host_keys()
 
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            pass
+
     # Start sync loops
-    asyncio.create_task(sync_fingerprints_bundle(admission_engine))
-    asyncio.create_task(sync_accepted_credentials(admission_engine))
+    fp_task = asyncio.create_task(sync_fingerprints_bundle(admission_engine, stop_event))
+    cred_task = asyncio.create_task(sync_accepted_credentials(admission_engine, stop_event))
 
     logger.info(f"Starting NetWatch SSH-Gateway on {LISTEN_HOST}:{LISTEN_PORT}...")
     server = await asyncssh.create_server(
@@ -376,7 +571,15 @@ async def start_gateway_server():
         server_host_keys=host_keys,
         server_version=SERVER_VERSION
     )
-    await server.wait_closed()
+    try:
+        await stop_event.wait()
+    finally:
+        server.close()
+        await server.wait_closed()
+        for t in (fp_task, cred_task):
+            t.cancel()
+        await asyncio.gather(fp_task, cred_task, return_exceptions=True)
+        admission_engine.close()
 
 
 def main():

@@ -46,18 +46,20 @@ COPY --from=builder /src/openssh-*/debian/tmp/usr/sbin/sshd /usr/sbin/sshd
 # Create a non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser
 
-# Adjust permissions for SSH, run directory and log files
-RUN mkdir -p /etc/ssh /run/sshd && \
+# Move sshd to Port 2222 and prepare directories for non-root execution
+RUN sed -i.orig -e 's/^#\(Port 22\)/\122/' /etc/ssh/sshd_config && \
+    mkdir -p /etc/ssh /etc/ssh/host_keys /run/sshd /var/lib/netwatch_gateway && \
     chmod 0755 /run/sshd && \
-    touch /var/log/ssh.log
+    touch /var/log/ssh.log && \
+    chown -R appuser:appuser /etc/ssh /var/log/ssh.log /var/lib/netwatch_gateway
 
 # Set working directory
 WORKDIR /home/appuser/code
 RUN chown -R appuser:appuser /home/appuser
 
-# Switch to appuser to install virtualenv dependencies
+# Switch to appuser to install virtualenv dependencies and run unprivileged
 USER appuser
-COPY requirements.txt /home/appuser/code/
+COPY --chown=appuser:appuser requirements.txt /home/appuser/code/
 
 # Create virtual environment and install dependencies
 RUN python3 -m venv /home/appuser/venv && \
@@ -65,23 +67,20 @@ RUN python3 -m venv /home/appuser/venv && \
 
 # Use venv Python and pip as default
 ENV PATH="/home/appuser/venv/bin:$PATH"
+ENV SSH_LISTEN_PORT=2222
 
-# Copy application code
-COPY monitor.py /home/appuser/code/
-
-# Switch back to root for system configuration and execution
-USER root
-
-# Move sshd to Port 2222
-# change /etc/ssh/sshd_config by uncommenting Port 22 and changing it to Port 2222
-RUN sed -i.orig -e 's/^#\(Port 22\)/\122/' /etc/ssh/sshd_config
+# Copy application code (including Gateway and Sequence Admission Engine)
+COPY --chown=appuser:appuser monitor.py gateway.py admission_engine.py /home/appuser/code/
 
 # Expose 2222
 EXPOSE 2222
 
 # Report the version of the openSSH server
-RUN sshd -V
+RUN /usr/sbin/sshd -V || true
 
-# Command to run your application
+# Healthcheck probing SSH listener port
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python3 -c "import os, socket; s = socket.create_connection(('127.0.0.1', int(os.getenv('SSH_LISTEN_PORT', '2222'))), timeout=3); s.close()"
+
+# Command to run application
 CMD ["python3", "monitor.py"]
-
