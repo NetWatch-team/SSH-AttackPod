@@ -347,13 +347,7 @@ async def sync_accepted_credentials(admission_engine: AdmissionEngine):
             if resp.status_code == 200:
                 data = resp.json()
                 creds = data.get("accepted_credentials", [])
-                for c in creds:
-                    admission_engine.add_accepted_credential(
-                        c["username"],
-                        c["password"],
-                        c.get("origin_attackgroup_uuid"),
-                        c.get("origin_attackcluster_uuid")
-                    )
+                admission_engine.sync_accepted_credentials_list(creds)
         except Exception as e:
             logger.debug(f"Failed to sync accepted credentials from Collector: {e}")
         await asyncio.sleep(60)

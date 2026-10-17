@@ -43,7 +43,7 @@ class AdmissionEngine:
     ):
         self.sqlite_db_path = sqlite_db_path
         self.window_seconds = window_seconds
-        self.min_distinct_pairs = min_distinct_pairs
+        self.min_distinct_pairs = max(3, min_distinct_pairs)
         self.min_score = min_score
         self.admission_probability = admission_probability
         self.max_new_admissions_per_day = max_new_admissions_per_day
@@ -94,7 +94,7 @@ class AdmissionEngine:
         if "window_seconds" in params:
             self.window_seconds = int(params["window_seconds"])
         if "min_distinct_pairs" in params:
-            self.min_distinct_pairs = int(params["min_distinct_pairs"])
+            self.min_distinct_pairs = max(3, int(params["min_distinct_pairs"]))
         if "min_score" in params:
             self.min_score = float(params["min_score"])
         if "admission_probability" in params:
@@ -104,6 +104,27 @@ class AdmissionEngine:
             f"Loaded fingerprint bundle v{self.bundle_version} with {len(self.fingerprint_bundle)} clusters. "
             f"(Params: window={self.window_seconds}s, min_pairs={self.min_distinct_pairs}, min_score={self.min_score})"
         )
+
+    def sync_accepted_credentials_list(self, creds_list: List[dict]):
+        """Synchronizes accepted credentials from central server, replacing local cache so pruned/expired credentials vanish."""
+        now = time.time()
+        expires = now + (self.accepted_credential_ttl_days * 86400)
+        with self.conn:
+            self.conn.execute("DELETE FROM local_accepted_credentials")
+            for c in creds_list:
+                self.conn.execute("""
+                    INSERT INTO local_accepted_credentials 
+                    (username, password, origin_attackgroup_uuid, matched_cluster_uuid, accepted_at, expires_at, times_used)
+                    VALUES (?, ?, ?, ?, ?, ?, 1)
+                """, (
+                    c["username"],
+                    c["password"],
+                    c.get("origin_attackgroup_uuid"),
+                    c.get("origin_attackcluster_uuid"),
+                    now,
+                    expires
+                ))
+        logger.info(f"Synchronized {len(creds_list)} accepted credentials into local cache.")
 
     def get_active_accepted_credentials(self) -> List[dict]:
         """Returns all currently valid accepted credentials from local cache."""
@@ -166,9 +187,25 @@ class AdmissionEngine:
         active_creds = self.get_active_accepted_credentials()
         for cred in active_creds:
             if cred["username"] == username and cred["password"] == password:
+                # Check source IP cooldown to protect against rapid bot scanner flooding
+                last_adm = self.admissions_cooldown.get(src_ip, 0)
+                if (now - last_adm) < 60:
+                    logger.info(f"[GATE] Accepted credential skipped: IP {src_ip} in cooldown window")
+                    return (
+                        AdmissionDecision.REJECT,
+                        AdmissionReason.COOLDOWN_ACTIVE,
+                        {}
+                    )
+
+                self.admissions_cooldown[src_ip] = now
                 # Increment usage count
-                self.add_accepted_credential(username, password)
-                logger.info(f"[ADMISSION] IP {src_ip} admitted via active accepted credential for '{username}'")
+                self.add_accepted_credential(
+                    username, 
+                    password,
+                    origin_attackgroup_uuid=cred.get("origin_attackgroup_uuid"),
+                    matched_cluster_uuid=cred.get("matched_cluster_uuid")
+                )
+                logger.info(f"[ADMISSION] IP {src_ip} admitted via strictly unique accepted credential for '{username}'")
                 return (
                     AdmissionDecision.ADMIT,
                     AdmissionReason.ACCEPTED_CREDENTIAL,
