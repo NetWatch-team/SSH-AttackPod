@@ -264,6 +264,10 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
             )
             if self.channel and not self._closed:
                 self.channel.close()
+        except (AttributeError, asyncssh.Error) as e:
+            logger.debug(f"Relay channel closed prematurely: {e}")
+            if self.channel and not self._closed:
+                self.channel.close()
         except Exception as e:
             logger.error(f"Relay error to Cowrie: {e}")
             if self.channel and not self._closed:
@@ -464,7 +468,11 @@ class GatewaySSHServer(asyncssh.SSHServer):
         except Exception as e:
             logger.error(f"Failed to connect to Honeypot Farm Broker: {e}")
 
-        # Farm unavailable fallback
+        # Farm unavailable fallback: reset admission state so disconnect does not emit ghost engagement
+        self.admitted_engagement_uuid = None
+        self.admitted_metadata = None
+        self.session_start_time = None
+        self.relay_token = None
         return False
 
     def session_requested(self):
@@ -473,7 +481,7 @@ class GatewaySSHServer(asyncssh.SSHServer):
 
     def connection_lost(self, exc):
         """Finalizes engagement metrics on disconnect."""
-        if self.admitted_engagement_uuid and self.session_start_time:
+        if self.admitted_engagement_uuid and self.session_start_time and self.relay_token:
             duration = int(time.time() - self.session_start_time)
             logger.info(f"Engagement {self.admitted_engagement_uuid} disconnected. Duration: {duration}s")
             try:
@@ -482,6 +490,9 @@ class GatewaySSHServer(asyncssh.SSHServer):
                     eng_url,
                     json={
                         "engagement_uuid": self.admitted_engagement_uuid,
+                        "sensor_uuid": SENSOR_UUID,
+                        "source_ip": self.peer_ip,
+                        "username": self.admitted_username or "unknown",
                         "session_end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         "duration_seconds": duration,
                         "engagement_status": "COMPLETED",
