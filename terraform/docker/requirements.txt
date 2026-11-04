@@ -1,1 +1,5 @@
-requests
+requests>=2.34.2
+asyncssh>=2.24.1
+cryptography>=50.0.2
+urllib3>=2.8.0
+certifi>=2026.10.23

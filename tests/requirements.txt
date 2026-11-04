@@ -1,5 +1,5 @@
-pytest==8.3.4
-docker==7.1.0
-paramiko==3.5.0
-requests==2.32.3
-psutil==6.1.1
+pytest>=9.1.1
+docker>=7.2.0
+paramiko>=5.0.0
+requests>=2.34.2
+psutil>=7.2.2

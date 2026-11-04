@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   check-version:
+    name: Check Upstream OpenSSH Version
     runs-on: ubuntu-latest
+    outputs:
+      should_trigger: ${{ steps.compare.outputs.should_trigger }}
+      latest_version: ${{ steps.check_version.outputs.latest_version }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -40,32 +44,50 @@ jobs:
           echo "Current tag: $CURRENT_TAG"
           echo "Latest upstream version: $LATEST_VER"
 
-          # Extract the base OpenSSH version (e.g. "9.6" from "9.6p1" or "9.6_v2")
-          # so that tag naming conventions don't cause false positives.
           LATEST_BASE=$(echo "$LATEST_VER" | grep -oP '^\d+\.\d+')
           CURRENT_BASE=$(echo "$CURRENT_TAG" | grep -oP '^\d+\.\d+')
           echo "Comparing base versions: upstream=$LATEST_BASE vs current=$CURRENT_BASE"
 
-          if [ -z "$CURRENT_BASE" ] || [ "$LATEST_BASE" != "$CURRENT_BASE" ]; then
+          CLEAN_TAG=$(echo "$LATEST_VER" | sed -E 's/[^a-zA-Z0-9_.-]/_/g')
+
+          if git rev-parse -q --verify "refs/tags/${CLEAN_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${CLEAN_TAG} already exists. No build required."
+            echo "should_trigger=false" >> $GITHUB_OUTPUT
+          elif [ -n "$CURRENT_BASE" ] && [ "$LATEST_BASE" != "$CURRENT_BASE" ]; then
+            echo "New upstream version detected: $LATEST_VER (differs from current base $CURRENT_BASE)"
+            echo "should_trigger=true" >> $GITHUB_OUTPUT
+          elif [ "$CURRENT_TAG" = "none" ] || ! git tag -l | grep -Fxq "${CLEAN_TAG}"; then
+            echo "New upstream version tag needed: $CLEAN_TAG"
             echo "should_trigger=true" >> $GITHUB_OUTPUT
           else
+            echo "No new version detected."
             echo "should_trigger=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Trigger Build Workflow
-        if: steps.compare.outputs.should_trigger == 'true'
-        env:
-          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          if [ -z "$PAT_TOKEN" ]; then
-            echo "::warning::PAT_TOKEN secret is not set. Cannot trigger repository_dispatch (GITHUB_TOKEN lacks the required scope). Please add a PAT_TOKEN secret with repo scope."
-            exit 1
-          fi
+  publish:
+    name: Build & Publish Container
+    needs: check-version
+    if: needs.check-version.outputs.should_trigger == 'true'
+    uses: ./.github/workflows/docker-publishing.yaml
+    with:
+      image_tag_version: ${{ needs.check-version.outputs.latest_version }}
+      override_latest: "true"
+    secrets: inherit
 
-      - name: Dispatch Build Event
-        if: success() && steps.compare.outputs.should_trigger == 'true'
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.PAT_TOKEN }}
-          event-type: openssh-updated
-          client-payload: '{"version": "${{ steps.check_version.outputs.latest_version }}"}'
+  tag-release:
+    name: Tag Upstream Release
+    needs: [check-version, publish]
+    if: needs.check-version.outputs.should_trigger == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Create and Push Tag
+        run: |
+          TAG_NAME=$(echo "${{ needs.check_version.outputs.latest_version }}" | sed -E 's/[^a-zA-Z0-9_.-]/_/g')
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" -m "Automated build for OpenSSH $TAG_NAME"
+          git push origin "$TAG_NAME" || true
