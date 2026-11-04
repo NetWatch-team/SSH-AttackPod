@@ -51,7 +51,7 @@ RUN apt-get update && \
         openssh-server && \
     apt-get clean && \
     apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/share/doc/* /usr/share/man/*
+    rm -rf /etc/ssh/ssh_host_* /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/share/doc/* /usr/share/man/*
 
 # Copy patched sshd binary from builder stage
 COPY --from=builder /src/openssh-*/debian/tmp/usr/sbin/sshd /usr/sbin/sshd
@@ -62,11 +62,12 @@ COPY --from=builder /opt/venv /opt/venv
 # Create a non-root system user
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser -s /bin/bash appuser
 
-# Move sshd to Port 2222 and prepare runtime directories with strict permissions
+# Move sshd to Port 2222, prepare runtime directories, and ensure no default host keys remain baked in
 RUN sed -i.orig -e 's/^#\(Port 22\)/\122/' /etc/ssh/sshd_config && \
     mkdir -p /etc/ssh /etc/ssh/host_keys /run/sshd /var/lib/netwatch_gateway /var/log && \
     chmod 0755 /run/sshd && \
     touch /var/log/ssh.log && \
+    rm -f /etc/ssh/ssh_host_* && \
     chown -R appuser:appuser /etc/ssh /var/log/ssh.log /var/lib/netwatch_gateway /opt/venv
 
 # Set working directory
@@ -86,7 +87,7 @@ COPY --chown=appuser:appuser monitor.py gateway.py admission_engine.py /home/app
 # Expose SSH port
 EXPOSE 2222
 
-# Report the version of the OpenSSH server
+# Report the version of the OpenSSH server and ensure host keys were not generated
 RUN /usr/sbin/sshd -V || true
 
 # Healthcheck probing SSH listener port

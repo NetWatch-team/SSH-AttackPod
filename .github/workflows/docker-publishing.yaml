@@ -84,7 +84,8 @@ jobs:
             --format table \
             --exit-code 1 \
             --ignore-unfixed \
-            --vuln-type os,library \
+            --scanners vuln \
+            --pkg-types os,library \
             --severity CRITICAL,HIGH \
             netwatch_ssh-attackpod:test
 
