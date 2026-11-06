@@ -8,9 +8,10 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
-  check-version:
+  check_version:
     name: Check Upstream OpenSSH Version
     runs-on: ubuntu-latest
     outputs:
@@ -66,18 +67,21 @@ jobs:
 
   publish:
     name: Build & Publish Container
-    needs: check-version
-    if: needs.check-version.outputs.should_trigger == 'true'
+    permissions:
+      contents: read
+      packages: write
+    needs: check_version
+    if: needs.check_version.outputs.should_trigger == 'true'
     uses: ./.github/workflows/docker-publishing.yaml
     with:
-      image_tag_version: ${{ needs.check-version.outputs.latest_version }}
+      image_tag_version: ${{ needs.check_version.outputs.latest_version }}
       override_latest: "true"
     secrets: inherit
 
   tag-release:
     name: Tag Upstream Release
-    needs: [check-version, publish]
-    if: needs.check-version.outputs.should_trigger == 'true'
+    needs: [check_version, publish]
+    if: needs.check_version.outputs.should_trigger == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
