@@ -81,6 +81,18 @@ jobs:
             --severity CRITICAL,HIGH \
             --no-progress \
             ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
+          trivy image \
+            --format cyclonedx \
+            --output sbom.cdx.json \
+            --no-progress \
+            ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
+
+      - name: Upload CycloneDX SBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyclonedx-sbom-${{ github.sha }}
+          path: sbom.cdx.json
+          retention-days: 30
       - name: Push Verified Image to Private Registry (docker.netwatch.team)
         run: |
           docker push ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}

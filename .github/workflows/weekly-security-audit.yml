@@ -1,0 +1,41 @@
+name: Weekly Automated Security & DAST Audit (SSH-AttackPod)
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  REPO_NAME: "SSH-AttackPod"
+  REGISTRY_IMAGE: "docker.netwatch.team/netwatch_ssh-attackpod"
+  DOCKERFILE_PATH: "src/Dockerfile"
+  BUILD_CONTEXT: "src"
+  SRC_DIR: "src"
+  REQUIREMENTS_FILE: "src/requirements.txt"
+  SERVICE_PORT: "none"
+
+jobs:
+  weekly-security-audit:
+    name: "Weekly Isolated Container DAST, SAST, CVE & SBOM Audit"
+    runs-on: [self-hosted, netwatch-core]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Isolated Container Security Audit & Raise GitHub Issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: /opt/netwatch/cicd/run_weekly_security_audit.sh
+
+      - name: Archive Security Audit Report & CycloneDX SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-and-sbom-SSH-AttackPod
+          path: |
+            security-audit-report.md
+            sbom.cdx.json
+          retention-days: 30
