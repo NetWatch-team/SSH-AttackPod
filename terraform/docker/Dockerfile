@@ -94,6 +94,7 @@ EXPOSE 2222
 RUN /usr/sbin/sshd -V || true
 
 # Healthcheck probing SSH listener port
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python3 -c "import os, socket; s = socket.create_connection(('127.0.0.1', int(os.getenv('SSH_LISTEN_PORT', '2222'))), timeout=3); s.close()"
 
