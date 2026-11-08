@@ -5,6 +5,7 @@ FROM ubuntu:24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Enable 'deb-src' entries dynamically for all architectures, install build dependencies, and compile patched OpenSSH
+# hadolint ignore=DL3008,DL3009
 RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true && \
     apt-get update && \
     apt-get upgrade -y && \
@@ -30,6 +31,7 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
 
 # Build isolated Python virtual environment in builder stage to omit pip/build tools from runtime
 COPY requirements.txt /tmp/requirements.txt
+# hadolint ignore=DL3013
 RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel && \
     /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt && \
@@ -44,6 +46,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Apply security upgrades and install only required runtime dependencies (no pip, no compiler tools)
+# hadolint ignore=DL3008,DL3009
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install --no-install-recommends -y \

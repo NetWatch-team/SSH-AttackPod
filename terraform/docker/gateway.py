@@ -6,20 +6,22 @@ Rejected attempts are reported as standard brute-force attacks to Collector 2.0.
 Admitted attempts are relayed over WireGuard to the central Honeypot Farm.
 """
 
+import asyncio
+import hashlib
+import ipaddress
+import logging
 import os
-import sys
+import signal
 import time
 import uuid
-import signal
-import asyncio
-import logging
-import ipaddress
+from typing import Any
+
 import requests
-from typing import Optional, Dict
 
 try:
     import asyncssh
 except ImportError:  # pragma: no cover - fallback for lightweight unit test runners
+
     class _AsyncSSHStub:
         class SSHServer:
             pass
@@ -28,26 +30,26 @@ except ImportError:  # pragma: no cover - fallback for lightweight unit test run
             pass
 
         @staticmethod
-        async def connect(*args, **kwargs):
+        async def connect(*_args, **_kwargs):
             raise RuntimeError("asyncssh is not installed")
 
         @staticmethod
-        async def create_server(*args, **kwargs):
+        async def create_server(*_args, **_kwargs):
             raise RuntimeError("asyncssh is not installed")
 
         @staticmethod
-        def read_private_key(*args, **kwargs):
+        def read_private_key(*_args, **_kwargs):
             raise RuntimeError("asyncssh is not installed")
 
         @staticmethod
-        def generate_private_key(*args, **kwargs):
+        def generate_private_key(*_args, **_kwargs):
             raise RuntimeError("asyncssh is not installed")
 
-    asyncssh = _AsyncSSHStub()
+    asyncssh = _AsyncSSHStub()  # type: ignore[assignment]
 
-from admission_engine import AdmissionEngine, AdmissionDecision, AdmissionReason
+from admission_engine import AdmissionDecision, AdmissionEngine
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ssh_gateway")
 
 # Environment configurations
@@ -58,7 +60,7 @@ SENSOR_TLP = os.getenv("SENSOR_TLP", "CLEAR")
 FARM_BROKER_URL = os.getenv("FARM_BROKER_URL", "http://10.20.255.1:8080")
 FARM_BROKER_TOKEN = os.getenv("FARM_BROKER_TOKEN", "")
 
-LISTEN_HOST = os.getenv("SSH_LISTEN_HOST", "0.0.0.0")
+LISTEN_HOST = os.getenv("SSH_LISTEN_HOST", "0.0.0.0")  # nosec B104
 LISTEN_PORT = int(os.getenv("SSH_LISTEN_PORT", "22"))
 SERVER_VERSION = os.getenv("SSH_SERVER_VERSION", "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5")
 HOST_KEYS_DIR = os.getenv("HOST_KEYS_DIR", "/etc/ssh/host_keys")
@@ -80,11 +82,7 @@ def is_private_ip(ip: str) -> bool:
     """Checks if an IP address is RFC 1918 private, loopback, or link-local (excluding RFC 5737 documentation IPs)."""
     try:
         ip_obj = ipaddress.ip_address(ip)
-        return (
-            ip_obj.is_loopback
-            or ip_obj.is_link_local
-            or any(ip_obj in net for net in _RFC1918_NETWORKS)
-        )
+        return ip_obj.is_loopback or ip_obj.is_link_local or any(ip_obj in net for net in _RFC1918_NETWORKS)
     except ValueError:
         return False
 
@@ -119,7 +117,58 @@ def ensure_host_keys():
     return keys
 
 
-def report_bruteforce_attack(src_ip: str, user: str, password: str, dst_ip: str):
+def compute_hassh_from_connection(conn: Any) -> tuple[str | None, str | None]:
+    """Extracts HASSH client fingerprint and algorithm string from an asyncssh connection or mock."""
+    client_kexinit = getattr(conn, "_client_kexinit", None)
+    if not client_kexinit:
+        hassh = getattr(conn, "hassh", None)
+        hassh_algs = getattr(conn, "hassh_algorithms", None)
+        return hassh, hassh_algs
+
+    try:
+        from asyncssh.packet import SSHPacket
+
+        packet = SSHPacket(client_kexinit)
+        packet.get_byte()  # packet type (SSH_MSG_KEXINIT = 20)
+        packet.get_bytes(16)  # cookie
+        kex_algs = packet.get_namelist()
+        packet.get_namelist()  # server_host_key_algs
+        enc_algs_cs = packet.get_namelist()
+        packet.get_namelist()  # enc_algs_sc
+        mac_algs_cs = packet.get_namelist()
+        packet.get_namelist()  # mac_algs_sc
+        comp_algs_cs = packet.get_namelist()
+        packet.get_namelist()  # comp_algs_sc
+
+        kex_str = ",".join(a.decode("ascii", "replace") if isinstance(a, bytes) else str(a) for a in kex_algs)
+        enc_str = ",".join(a.decode("ascii", "replace") if isinstance(a, bytes) else str(a) for a in enc_algs_cs)
+        mac_str = ",".join(a.decode("ascii", "replace") if isinstance(a, bytes) else str(a) for a in mac_algs_cs)
+        cmp_str = ",".join(a.decode("ascii", "replace") if isinstance(a, bytes) else str(a) for a in comp_algs_cs)
+        raw_hassh = f"{kex_str};{enc_str};{mac_str};{cmp_str}"
+        hassh_md5 = hashlib.md5(raw_hassh.encode("utf-8"), usedforsecurity=False).hexdigest()
+        return hassh_md5, raw_hassh
+    except Exception as e:
+        logger.debug(f"Failed to compute HASSH from connection: {e}")
+        return None, None
+
+
+def report_bruteforce_attack(
+    src_ip: str,
+    user: str,
+    password: str,
+    dst_ip: str,
+    evidence: str | None = None,
+    source_port: int | None = None,
+    ssh_client_version: str | None = None,
+    hassh: str | None = None,
+    hassh_algorithms: str | None = None,
+    auth_method: str = "password",
+    pubkey_fingerprint: str | None = None,
+    pubkey_algorithm: str | None = None,
+    pubkey_comment: str | None = None,
+    attempt_index_in_conn: int | None = None,
+    inter_attempt_ms: int | None = None,
+):
     """Submits standard low-interaction brute-force payload to Collector 2.0 without logging cleartext passwords."""
     test_mode = os.getenv("NETWATCH_TEST_MODE", "false").lower() != "false"
     allow_private = test_mode or os.getenv("NETWATCH_ALLOW_PRIVATE_IPS", "false").lower() == "true"
@@ -129,6 +178,39 @@ def report_bruteforce_attack(src_ip: str, user: str, password: str, dst_ip: str)
 
     url = f"{COLLECTOR_URL}/v2/add_attack/ssh_bruteforce"
     headers = {"Authorization": COLLECTOR_AUTH, "Content-Type": "application/json"}
+
+    metadata: dict[str, Any] = {
+        "username": user,
+        "password": password,
+        "auth_method": auth_method,
+    }
+    if source_port is not None and source_port > 0:
+        metadata["source_port"] = source_port
+    if ssh_client_version:
+        metadata["ssh_client_version"] = ssh_client_version
+    if hassh:
+        metadata["hassh"] = hassh
+    if hassh_algorithms:
+        metadata["hassh_algorithms"] = hassh_algorithms
+    if pubkey_fingerprint:
+        metadata["pubkey_fingerprint"] = pubkey_fingerprint
+    if pubkey_algorithm:
+        metadata["pubkey_algorithm"] = pubkey_algorithm
+    if pubkey_comment:
+        metadata["pubkey_comment"] = pubkey_comment
+    if attempt_index_in_conn is not None:
+        metadata["attempt_index_in_conn"] = attempt_index_in_conn
+    if inter_attempt_ms is not None:
+        metadata["inter_attempt_ms"] = inter_attempt_ms
+
+    if evidence is None:
+        if auth_method == "publickey":
+            evidence = (
+                f"Probed public key {pubkey_algorithm or ''} {pubkey_fingerprint or ''} for {user} from {src_ip}"
+            ).strip()
+        else:
+            evidence = f"Failed password attempt for {user} from {src_ip}"
+
     payload = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "uuid": SENSOR_UUID,
@@ -138,8 +220,8 @@ def report_bruteforce_attack(src_ip: str, user: str, password: str, dst_ip: str)
         "attack_type": "SSH_BRUTE_FORCE",
         "source_type": "IP",
         "test_mode": test_mode,
-        "evidence": f"Failed password attempt for {user} from {src_ip}",
-        "metadata": {"username": user, "password": password}
+        "evidence": evidence,
+        "metadata": metadata,
     }
     try:
         requests.post(url, json=payload, headers=headers, timeout=3)
@@ -157,25 +239,26 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
         self.server = server
         self.max_session_seconds = max_session_seconds
         self.idle_timeout_seconds = idle_timeout_seconds
-        self.channel = None
-        self.client_conn = None
-        self.cowrie_process = None
+        self.channel: Any = None
+        self.client_conn: Any = None
+        self.cowrie_process: Any = None
         self.term_type = "xterm-256color"
         self.term_size = (80, 24, 0, 0)
         self.pty_enabled = False
-        self.env: Dict[str, str] = {}
+        self.exec_command: str | None = None
+        self.env: dict[str, str] = {}
         self.last_activity = time.monotonic()
-        self._relay_task: Optional[asyncio.Task] = None
-        self._stdout_task: Optional[asyncio.Task] = None
-        self._stderr_task: Optional[asyncio.Task] = None
-        self._watchdog_task: Optional[asyncio.Task] = None
+        self._relay_task: asyncio.Task | None = None
+        self._stdout_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._watchdog_task: asyncio.Task | None = None
         self._closed = False
 
     def connection_made(self, chan):
         self.channel = chan
         self.last_activity = time.monotonic()
 
-    def pty_requested(self, term_type, term_size, term_modes):
+    def pty_requested(self, term_type, term_size, _term_modes):
         self.term_type = term_type
         self.term_size = term_size
         self.pty_enabled = True
@@ -195,6 +278,7 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
         return True
 
     def exec_requested(self, command):
+        self.exec_command = command
         self._relay_task = asyncio.create_task(self._start_relay(command=command))
         return True
 
@@ -223,7 +307,7 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
         except asyncio.CancelledError:
             pass
 
-    async def _start_relay(self, command: Optional[str] = None):
+    async def _start_relay(self, command: str | None = None):
         try:
             self.last_activity = time.monotonic()
             self.client_conn = await asyncssh.connect(
@@ -231,23 +315,20 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
                 port=self.server.cowrie_port,
                 username=self.server.admitted_username or "root",
                 password=self.server.relay_token,
-                known_hosts=None
+                known_hosts=None,
             )
             term_size_pair = (self.term_size[0], self.term_size[1])
             self.cowrie_process = await self.client_conn.create_process(
                 command=command,
                 term_type=self.term_type if (self.pty_enabled or command is None) else None,
                 term_size=term_size_pair if (self.pty_enabled or command is None) else None,
-                env=self.env
+                env=self.env,
             )
             self._stdout_task = asyncio.create_task(self._pipe_cowrie_to_client())
             self._stderr_task = asyncio.create_task(self._pipe_cowrie_stderr_to_client())
             self._watchdog_task = asyncio.create_task(self._idle_watchdog())
 
-            await asyncio.wait_for(
-                self.cowrie_process.wait(),
-                timeout=self.max_session_seconds
-            )
+            await asyncio.wait_for(self.cowrie_process.wait(), timeout=self.max_session_seconds)
             if self._stdout_task:
                 await asyncio.gather(self._stdout_task, return_exceptions=True)
             if self._stderr_task:
@@ -257,7 +338,7 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
             if self.channel and not self._closed:
                 self.channel.exit(exit_status)
                 self.channel.close()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.info(
                 f"Session {self.server.admitted_engagement_uuid} reached max session duration "
                 f"({self.max_session_seconds}s); closing relay."
@@ -331,7 +412,7 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
         except Exception:
             pass
 
-    def data_received(self, data, datatype):
+    def data_received(self, data, _datatype):
         self.last_activity = time.monotonic()
         self.server.bytes_in += len(data)
         if self.cowrie_process and not self.cowrie_process.stdin.is_closing():
@@ -342,7 +423,7 @@ class CowrieRelaySession(asyncssh.SSHServerSession):
             self.cowrie_process.stdin.write_eof()
         return True
 
-    def connection_lost(self, exc):
+    def connection_lost(self, _exc):
         self._closed = True
         for task in (self._watchdog_task, self._stdout_task, self._stderr_task, self._relay_task):
             if task and not task.done():
@@ -363,34 +444,113 @@ class GatewaySSHServer(asyncssh.SSHServer):
     def __init__(self, admission_engine: AdmissionEngine, local_ip: str):
         self.engine = admission_engine
         self.local_ip = local_ip
+        self.conn: Any = None
         self.peer_ip = ""
         self.peer_port = 0
-        self.admitted_engagement_uuid = None
-        self.admitted_metadata = None
-        self.admitted_username = None
-        self.cowrie_host = None
-        self.cowrie_port = None
-        self.relay_token = None
-        self.cowrie_client_conn = None
-        self.session_start_time = None
+        self.client_version = ""
+        self.hassh: str | None = None
+        self.hassh_algorithms: str | None = None
+        self.conn_start_time = time.monotonic()
+        self.last_attempt_time = self.conn_start_time
+        self.attempt_count = 0
+        self.current_session: CowrieRelaySession | None = None
+        self.admitted_engagement_uuid: str | None = None
+        self.admitted_metadata: dict[str, Any] | None = None
+        self.admitted_username: str | None = None
+        self.cowrie_host: str | None = None
+        self.cowrie_port: int | None = None
+        self.relay_token: str | None = None
+        self.cowrie_client_conn: Any = None
+        self.session_start_time: float | None = None
         self.bytes_in = 0
         self.bytes_out = 0
 
     def connection_made(self, conn):
+        self.conn = conn
         peername = conn.get_extra_info("peername")
-        self.peer_ip = peername[0] if peername else "0.0.0.0"
+        self.peer_ip = peername[0] if peername else "0.0.0.0"  # nosec B104
         self.peer_port = peername[1] if peername else 0
+        client_ver = conn.get_extra_info("client_version")
+        self.client_version = client_ver if isinstance(client_ver, str) else ""
+        self.conn_start_time = time.monotonic()
+        self.last_attempt_time = self.conn_start_time
+        self.attempt_count = 0
         logger.debug(f"Incoming connection from {self.peer_ip}:{self.peer_port}")
+
+    def public_key_auth_supported(self):
+        return True
+
+    def validate_public_key(self, username, key):
+        now = time.monotonic()
+        self.attempt_count += 1
+        inter_attempt_ms = int((now - self.last_attempt_time) * 1000)
+        self.last_attempt_time = now
+
+        if not self.hassh and self.conn:
+            self.hassh, self.hassh_algorithms = compute_hassh_from_connection(self.conn)
+        if not self.client_version and self.conn:
+            cver = self.conn.get_extra_info("client_version")
+            self.client_version = cver if isinstance(cver, str) else ""
+
+        pubkey_algo = None
+        pubkey_fp = None
+        pubkey_comment = None
+        if hasattr(key, "get_algorithm"):
+            pubkey_algo = key.get_algorithm()
+        if hasattr(key, "get_fingerprint"):
+            pubkey_fp = key.get_fingerprint("sha256")
+        if hasattr(key, "get_comment"):
+            pubkey_comment = key.get_comment()
+
+        report_bruteforce_attack(
+            src_ip=self.peer_ip,
+            user=username,
+            password="",
+            dst_ip=self.local_ip,
+            source_port=self.peer_port,
+            ssh_client_version=self.client_version,
+            hassh=self.hassh,
+            hassh_algorithms=self.hassh_algorithms,
+            auth_method="publickey",
+            pubkey_fingerprint=pubkey_fp,
+            pubkey_algorithm=pubkey_algo,
+            pubkey_comment=pubkey_comment,
+            attempt_index_in_conn=self.attempt_count,
+            inter_attempt_ms=inter_attempt_ms,
+        )
+        return False
 
     def password_auth_supported(self):
         return True
 
     def validate_password(self, username, password):
+        now = time.monotonic()
+        self.attempt_count += 1
+        inter_attempt_ms = int((now - self.last_attempt_time) * 1000)
+        self.last_attempt_time = now
+
+        if not self.hassh and self.conn:
+            self.hassh, self.hassh_algorithms = compute_hassh_from_connection(self.conn)
+        if not self.client_version and self.conn:
+            cver = self.conn.get_extra_info("client_version")
+            self.client_version = cver if isinstance(cver, str) else ""
+
         decision, reason, meta = self.engine.evaluate_attempt(self.peer_ip, username, password)
 
         if decision == AdmissionDecision.REJECT:
-            # Report standard bruteforce attempt
-            report_bruteforce_attack(self.peer_ip, username, password, self.local_ip)
+            report_bruteforce_attack(
+                src_ip=self.peer_ip,
+                user=username,
+                password=password,
+                dst_ip=self.local_ip,
+                source_port=self.peer_port,
+                ssh_client_version=self.client_version,
+                hassh=self.hassh,
+                hassh_algorithms=self.hassh_algorithms,
+                auth_method="password",
+                attempt_index_in_conn=self.attempt_count,
+                inter_attempt_ms=inter_attempt_ms,
+            )
             return False
 
         # --- ADMITTED! ---
@@ -414,10 +574,10 @@ class GatewaySSHServer(asyncssh.SSHServer):
                     "password": password,
                     "matched_cluster_uuid": meta.get("matched_cluster_uuid"),
                     "score": meta.get("score", 0.0),
-                    "matched_pairs_count": meta.get("matched_pairs_count", 0)
+                    "matched_pairs_count": meta.get("matched_pairs_count", 0),
                 },
                 headers={"Authorization": COLLECTOR_AUTH},
-                timeout=4
+                timeout=4,
             )
         except Exception as e:
             logger.error(f"Failed to notify Collector of admission: {e}")
@@ -436,10 +596,10 @@ class GatewaySSHServer(asyncssh.SSHServer):
                     "username": username,
                     "admission_reason": reason,
                     "session_start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "engagement_status": "ACTIVE"
+                    "engagement_status": "ACTIVE",
                 },
                 headers={"Authorization": COLLECTOR_AUTH},
-                timeout=4
+                timeout=4,
             )
         except Exception as e:
             logger.error(f"Failed to create engagement in Collector: {e}")
@@ -452,10 +612,10 @@ class GatewaySSHServer(asyncssh.SSHServer):
                     "engagement_uuid": eng_uuid,
                     "sensor_uuid": SENSOR_UUID,
                     "attacker_ip": self.peer_ip,
-                    "username": username
+                    "username": username,
                 },
                 headers={"Authorization": f"Bearer {FARM_BROKER_TOKEN}"} if FARM_BROKER_TOKEN else {},
-                timeout=5
+                timeout=5,
             )
             if broker_resp.status_code == 200:
                 broker_data = broker_resp.json()
@@ -477,36 +637,39 @@ class GatewaySSHServer(asyncssh.SSHServer):
 
     def session_requested(self):
         """Allows opening an interactive shell session channel."""
-        return CowrieRelaySession(self)
+        session = CowrieRelaySession(self)
+        self.current_session = session
+        return session
 
-    def connection_lost(self, exc):
+    def connection_lost(self, _exc):
         """Finalizes engagement metrics on disconnect."""
         if self.admitted_engagement_uuid and self.session_start_time and self.relay_token:
             duration = int(time.time() - self.session_start_time)
             logger.info(f"Engagement {self.admitted_engagement_uuid} disconnected. Duration: {duration}s")
             try:
                 eng_url = f"{COLLECTOR_URL}/v2/engagement"
-                requests.post(
-                    eng_url,
-                    json={
-                        "engagement_uuid": self.admitted_engagement_uuid,
-                        "sensor_uuid": SENSOR_UUID,
-                        "source_ip": self.peer_ip,
-                        "username": self.admitted_username or "unknown",
-                        "session_end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "duration_seconds": duration,
-                        "engagement_status": "COMPLETED",
-                        "bytes_in": self.bytes_in,
-                        "bytes_out": self.bytes_out
-                    },
-                    headers={"Authorization": COLLECTOR_AUTH},
-                    timeout=5
-                )
+                eng_payload: dict[str, Any] = {
+                    "engagement_uuid": self.admitted_engagement_uuid,
+                    "sensor_uuid": SENSOR_UUID,
+                    "source_ip": self.peer_ip,
+                    "username": self.admitted_username or "unknown",
+                    "session_end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "duration_seconds": duration,
+                    "engagement_status": "COMPLETED",
+                    "bytes_in": self.bytes_in,
+                    "bytes_out": self.bytes_out,
+                }
+                if self.current_session:
+                    if self.current_session.env:
+                        eng_payload["env_vars"] = self.current_session.env
+                    if getattr(self.current_session, "exec_command", None):
+                        eng_payload["exec_command"] = self.current_session.exec_command
+                requests.post(eng_url, json=eng_payload, headers={"Authorization": COLLECTOR_AUTH}, timeout=5)
             except Exception as e:
                 logger.error(f"Failed to finalize engagement in Collector: {e}")
 
 
-async def sync_fingerprints_bundle(admission_engine: AdmissionEngine, stop_event: Optional[asyncio.Event] = None):
+async def sync_fingerprints_bundle(admission_engine: AdmissionEngine, stop_event: asyncio.Event | None = None):
     """Background task syncing the cluster fingerprint bundle from Collector every 5 minutes."""
     while stop_event is None or not stop_event.is_set():
         try:
@@ -522,13 +685,13 @@ async def sync_fingerprints_bundle(admission_engine: AdmissionEngine, stop_event
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=300)
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
         else:
             await asyncio.sleep(300)
 
 
-async def sync_accepted_credentials(admission_engine: AdmissionEngine, stop_event: Optional[asyncio.Event] = None):
+async def sync_accepted_credentials(admission_engine: AdmissionEngine, stop_event: asyncio.Event | None = None):
     """Background task syncing accepted credentials from Collector."""
     while stop_event is None or not stop_event.is_set():
         try:
@@ -545,7 +708,7 @@ async def sync_accepted_credentials(admission_engine: AdmissionEngine, stop_even
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=60)
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
         else:
             await asyncio.sleep(60)
@@ -580,7 +743,7 @@ async def start_gateway_server():
         LISTEN_HOST,
         LISTEN_PORT,
         server_host_keys=host_keys,
-        server_version=SERVER_VERSION
+        server_version=SERVER_VERSION,
     )
     try:
         await stop_event.wait()

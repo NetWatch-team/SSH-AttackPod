@@ -1,6 +1,6 @@
 import unittest
-import time
-from src.admission_engine import AdmissionEngine, AdmissionDecision, AdmissionReason
+
+from src.admission_engine import AdmissionDecision, AdmissionEngine, AdmissionReason
 
 
 class TestAdmissionEngine(unittest.TestCase):
@@ -15,7 +15,7 @@ class TestAdmissionEngine(unittest.TestCase):
             max_new_admissions_per_day=3,
             max_accepted_credentials=3,
             accepted_credential_ttl_days=14,
-            admission_cooldown_hours=24
+            admission_cooldown_hours=24,
         )
 
         # Load dummy bundle
@@ -28,10 +28,10 @@ class TestAdmissionEngine(unittest.TestCase):
                         "pi:raspberryP1!": 5.0,
                         "ubnt:ubnt2019": 5.0,
                         "support:sup@rt#": 5.0,
-                        "cisco:cisco_vpn!": 4.5
+                        "cisco:cisco_vpn!": 4.5,
                     }
                 }
-            }
+            },
         }
         self.engine.load_bundle(self.bundle)
 

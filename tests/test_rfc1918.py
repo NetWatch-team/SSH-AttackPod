@@ -1,9 +1,9 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 # Add the src directory to the path so we can import monitor
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from monitor import is_private_ip
 
@@ -61,5 +61,5 @@ class TestRFC1918Filtering(unittest.TestCase):
         self.assertFalse(is_private_ip("invalid"))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

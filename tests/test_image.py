@@ -1,14 +1,15 @@
-import os
-import requests
-import pytest
-import docker
-import time
-import logging
 import json
-import paramiko
-import socket
-import psutil
+import logging
+import os
 import re
+import socket
+import time
+
+import docker
+import paramiko
+import psutil
+import pytest
+import requests
 
 REPORT_LOG_MESSAGE_PATTERN = r".*Reported .* to the NetWatch collector.*"
 
@@ -34,7 +35,7 @@ def container_port(container, port_name, retries=10, delay=1):
 def wait_for_log_message(container, message, expected_count=1, retries=10, delay=2):
     """Wait for a specific log message to appear in the container logs a specified number of times."""
     for _ in range(retries):
-        logs = container.logs().decode('utf-8')
+        logs = container.logs().decode("utf-8")
         match_count = len(re.findall(message, logs))
         if match_count >= expected_count:
             logging.info(f"Found '{message}' {match_count} times.")
@@ -43,7 +44,7 @@ def wait_for_log_message(container, message, expected_count=1, retries=10, delay
         time.sleep(delay)
 
     logging.error(f"Failed to find '{message}' {expected_count} times after {retries} retries.")
-    raise Exception(f"Timeout reached while waiting for log message matches.")
+    raise Exception("Timeout reached while waiting for log message matches.")
 
 
 @pytest.fixture(scope="session")
@@ -61,7 +62,7 @@ def mock_server():
         detach=True,
         auto_remove=True,
         ports={"1080/tcp": None},
-        network="netwatch_ssh_attackpod_ci_network"
+        network="netwatch_ssh_attackpod_ci_network",
     )
 
     try:
@@ -86,36 +87,22 @@ def setup_expectations(mock_server):
     requests.put(
         f"{mock_server}/mockserver/expectation",
         json={
-            "httpRequest": {
-                "method": "GET",
-                "path": "/check_ip"
-            },
+            "httpRequest": {"method": "GET", "path": "/check_ip"},
             "httpResponse": {
                 "statusCode": 200,
-                "headers": {
-                    "Content-Type": "application/json"
-                },
-                "body": '{"ip": "111.222.33.44"}'
-            }
-        }
+                "headers": {"Content-Type": "application/json"},
+                "body": '{"ip": "111.222.33.44"}',
+            },
+        },
     )
 
     # Expectation for POST /v2/add_attack/ssh_bruteforce
     requests.put(
         f"{mock_server}/mockserver/expectation",
         json={
-            "httpRequest": {
-                "method": "POST",
-                "path": "/v2/add_attack/ssh_bruteforce"
-            },
-            "httpResponse": {
-                "statusCode": 200,
-                "headers": {
-                    "Content-Type": "application/json"
-                },
-                "body": '{}'
-            }
-        }
+            "httpRequest": {"method": "POST", "path": "/v2/add_attack/ssh_bruteforce"},
+            "httpResponse": {"statusCode": 200, "headers": {"Content-Type": "application/json"}, "body": "{}"},
+        },
     )
 
 
@@ -129,11 +116,8 @@ def docker_container(mock_server):
         detach=True,
         auto_remove=True,
         ports={"2222/tcp": None},
-        environment={
-            "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080",
-            "NETWATCH_ALLOW_PRIVATE_IPS": "true"
-        },
-        network="netwatch_ssh_attackpod_ci_network"
+        environment={"NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080", "NETWATCH_ALLOW_PRIVATE_IPS": "true"},
+        network="netwatch_ssh_attackpod_ci_network",
     )
 
     try:
@@ -156,18 +140,15 @@ def docker_container_in_test_mode(mock_server):
         detach=True,
         auto_remove=True,
         ports={"2222/tcp": None},
-        environment={
-            "NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080",
-            "NETWATCH_TEST_MODE": "true"
-        },
-        network="netwatch_ssh_attackpod_ci_network"
+        environment={"NETWATCH_COLLECTOR_URL": "http://mockserver-pytest:1080", "NETWATCH_TEST_MODE": "true"},
+        network="netwatch_ssh_attackpod_ci_network",
     )
 
     try:
         time.sleep(2)
 
         container.reload()
-        ssh_host_port = container.attrs['NetworkSettings']['Ports']['2222/tcp'][0]['HostPort']
+        ssh_host_port = container.attrs["NetworkSettings"]["Ports"]["2222/tcp"][0]["HostPort"]
 
         logging.info(f"Docker container is exposing SSH on port {ssh_host_port} on the host.")
 
@@ -175,6 +156,7 @@ def docker_container_in_test_mode(mock_server):
     finally:
         container.stop()
         logging.info(f"Container {container.id} stopped.")
+
 
 def get_machine_ip_addresses():
     ip_addresses = []
@@ -188,7 +170,7 @@ def get_machine_ip_addresses():
 def match_value(actual_value, expected_value):
     """Helper function to match actual_value against expected_value (which can be a regex pattern)."""
     # Check if expected_value is a regex pattern (starts with ^, ends with $)
-    if isinstance(expected_value, str) and expected_value.startswith('^'):
+    if isinstance(expected_value, str) and expected_value.startswith("^"):
         return bool(re.match(expected_value, actual_value))
     return actual_value == expected_value  # Direct comparison for other types
 
@@ -196,14 +178,14 @@ def match_value(actual_value, expected_value):
 def ssh_connect_and_validate(mock_server, docker_container, username, password, expected_payload):
     """Helper function to perform SSH connection and validate MockServer logs."""
     container, ssh_port = docker_container
-    container_ip = 'localhost'
+    container_ip = "localhost"
 
     logging.info(f"Attempting SSH connection to container at {container_ip}:{ssh_port} with username '{username}'")
 
     ssh_client = paramiko.SSHClient()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    initial_matches = len(re.findall(REPORT_LOG_MESSAGE_PATTERN, container.logs().decode('utf-8')))
+    initial_matches = len(re.findall(REPORT_LOG_MESSAGE_PATTERN, container.logs().decode("utf-8")))
     try:
         ssh_client.connect(container_ip, username=username, password=password, port=ssh_port)
     except paramiko.ssh_exception.SSHException:
@@ -221,7 +203,8 @@ def ssh_connect_and_validate(mock_server, docker_container, username, password, 
 
     # Filter for POST requests to /v2/add_attack/ssh_bruteforce
     post_requests = [
-        req for req in logged_requests
+        req
+        for req in logged_requests
         if req.get("method") == "POST" and req.get("path") == "/v2/add_attack/ssh_bruteforce"
     ]
 
@@ -236,8 +219,10 @@ def ssh_connect_and_validate(mock_server, docker_container, username, password, 
         actual_value = request_payload.get(key)
 
         if isinstance(expected_value, dict):
-            assert actual_value == expected_value, f"Expected value for '{key}' to be '{expected_value}', but got '{actual_value}'"
-        elif isinstance(expected_value, str) and expected_value.startswith('^'):
+            assert actual_value == expected_value, (
+                f"Expected value for '{key}' to be '{expected_value}', but got '{actual_value}'"
+            )
+        elif isinstance(expected_value, str) and expected_value.startswith("^"):
             if not re.match(expected_value, str(actual_value)):
                 pytest.fail(f"Expected value for '{key}' to match '{expected_value}', but got '{actual_value}'")
         else:
@@ -263,10 +248,7 @@ def generate_expected_payload(username, password):
         "destination": "111.222.33.44",
         "attack_type": "SSH_BRUTE_FORCE",
         "test_mode": False,
-        "metadata": {
-            "username": username,
-            "password": password
-        }
+        "metadata": {"username": username, "password": password},
     }
 
 
@@ -275,7 +257,13 @@ def test_ssh_connect_root(mock_server, docker_container):
     expected_payload = generate_expected_payload(username="root", password="aBruteForcePassword123")
     evidence = rf"^Failed password for root from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
     expected_payload["evidence"] = evidence
-    ssh_connect_and_validate(mock_server, docker_container, username="root", password="aBruteForcePassword123", expected_payload=expected_payload)
+    ssh_connect_and_validate(
+        mock_server,
+        docker_container,
+        username="root",
+        password="aBruteForcePassword123",
+        expected_payload=expected_payload,
+    )
 
 
 def test_ssh_connect_non_existent_user(mock_server, docker_container):
@@ -283,7 +271,13 @@ def test_ssh_connect_non_existent_user(mock_server, docker_container):
     expected_payload = generate_expected_payload(username="nonExistingUser", password="aBruteForcePassword456")
     evidence = rf"^Failed password for invalid user nonExistingUser from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
     expected_payload["evidence"] = evidence
-    ssh_connect_and_validate(mock_server, docker_container, username="nonExistingUser", password="aBruteForcePassword456", expected_payload=expected_payload)
+    ssh_connect_and_validate(
+        mock_server,
+        docker_container,
+        username="nonExistingUser",
+        password="aBruteForcePassword456",
+        expected_payload=expected_payload,
+    )
 
 
 def test_ssh_connect_existent_user(mock_server, docker_container):
@@ -291,9 +285,22 @@ def test_ssh_connect_existent_user(mock_server, docker_container):
     expected_payload = generate_expected_payload(username="appuser", password="aBruteForcePassword789")
     evidence = rf"^Failed password for appuser from ({'|'.join(get_machine_ip_addresses())}) port \d+ ssh2$"
     expected_payload["evidence"] = evidence
-    ssh_connect_and_validate(mock_server, docker_container, username="appuser", password="aBruteForcePassword789", expected_payload=expected_payload)
+    ssh_connect_and_validate(
+        mock_server,
+        docker_container,
+        username="appuser",
+        password="aBruteForcePassword789",
+        expected_payload=expected_payload,
+    )
+
 
 def test_payload_contains_test_mode(mock_server, docker_container_in_test_mode):
     """Test if the POST payload contains test_mode true."""
-    expected_payload = { "test_mode": True }
-    ssh_connect_and_validate(mock_server, docker_container_in_test_mode, username="anyUser", password="anyPassword", expected_payload=expected_payload)
+    expected_payload = {"test_mode": True}
+    ssh_connect_and_validate(
+        mock_server,
+        docker_container_in_test_mode,
+        username="anyUser",
+        password="anyPassword",
+        expected_payload=expected_payload,
+    )

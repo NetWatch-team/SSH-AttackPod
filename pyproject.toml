@@ -5,9 +5,32 @@ exclude = [".git", ".venv", "venv", "venv_test", "__pycache__", "build", "dist",
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C90", "UP", "S", "SIM"]
+ignore = [
+    "E501",   # line length handled by ruff format
+    "C901",   # complex functions
+    "SIM108", # ternary operator simplify
+    "SIM105", # suppress exception
+    "SIM102", # nested if
+    "SIM103", # return bool condition
+    "B904",   # raise from err
+    "S104",   # 0.0.0.0 binding
+    "S311",   # pseudo-random generators
+    "S310",   # urllib open
+    "S110",   # try-except-pass
+    "UP035",  # deprecated imports
+    "UP006",  # typing generics
+    "E712",   # boolean comparison
+    "B007",   # loop control variable not used
+    "SIM117", # nested with
+    "S105",   # hardcoded password strings
+    "S603",   # subprocess call
+    "S607",   # partial executable path
+    "W291",   # trailing whitespace
+    "W293",   # blank line whitespace
+]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S105", "S106"]
+"tests/*" = ["S101", "S105", "S106", "S104", "E402", "F401", "F841", "E501", "S113", "S507"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12

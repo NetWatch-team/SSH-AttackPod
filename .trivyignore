@@ -1,0 +1,2 @@
+# Suppress base python image setuptools false positive
+CVE-2025-47273

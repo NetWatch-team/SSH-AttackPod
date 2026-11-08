@@ -1,27 +1,25 @@
+import ipaddress
+import json
 import logging
-import requests
-import re
 import os
+import queue
+import re
+import signal
+import subprocess
 import sys
-from datetime import datetime
 import threading
 import time
-import subprocess
-import signal
-import json
-import queue
-import ipaddress
+from datetime import datetime
+from typing import Any
+
+import requests
 
 MAX_QUEUE_SIZE = int(os.getenv("NETWATCH_MAX_QUEUE_SIZE", "10000"))
-attack_queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+attack_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 shutdown_event = threading.Event()
 _child_reap_requested = False
 
-logging.basicConfig(
-    encoding="utf-8",
-    level=logging.INFO,
-    format="%(asctime)s %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
 
 def get_env(key, fallback):
@@ -49,25 +47,21 @@ _RFC1918_NETWORKS = (
 def is_private_ip(ip: str) -> bool:
     """
     Check if an IP address is private/non-routable per RFC 1918 and related standards.
-    
+
     This includes:
     - RFC 1918 private addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
     - Loopback addresses (127.0.0.0/8)
     - Link-local addresses (169.254.0.0/16)
-    
+
     Args:
         ip: IP address string to check
-        
+
     Returns:
         True if IP is private/non-routable, False otherwise
     """
     try:
         ip_obj = ipaddress.ip_address(ip)
-        return (
-            ip_obj.is_loopback
-            or ip_obj.is_link_local
-            or any(ip_obj in net for net in _RFC1918_NETWORKS)
-        )
+        return ip_obj.is_loopback or ip_obj.is_link_local or any(ip_obj in net for net in _RFC1918_NETWORKS)
     except ValueError:
         logging.warning(f"Invalid IP address format: {ip}")
         return False
@@ -90,7 +84,7 @@ def redact_sshd_line(line: str) -> str:
     return re.sub(r"(password ')[^']*(')", r"\1***\2", line)
 
 
-def enqueue_attack(payload: dict, target_queue: queue.Queue = None):
+def enqueue_attack(payload: dict, target_queue: queue.Queue | None = None):
     """Enqueues an attack payload with drop-oldest eviction when the bounded queue is full."""
     q = target_queue if target_queue is not None else attack_queue
     try:
@@ -116,7 +110,9 @@ def get_local_ip():
                 logging.info(f"Got the following local IP: {local_ip}")
                 return local_ip
 
-            logging.error(f"[!] Got a non 200 status code from the netwatch backend: {response.status_code}, message: {response.text}")
+            logging.error(
+                f"[!] Got a non 200 status code from the netwatch backend: {response.status_code}, message: {response.text}"
+            )
 
         except requests.RequestException as e:
             logging.error(f"[!] Got a request exception while trying to get the local IP: {e}")
@@ -126,16 +122,45 @@ def get_local_ip():
 
         time.sleep(10)
 
-    logging.error("[!] The system was unable to get the local IP. Sensor can not work without local IP => Exit with code 1")
+    logging.error(
+        "[!] The system was unable to get the local IP. Sensor can not work without local IP => Exit with code 1"
+    )
     sys.exit(1)
 
 
-def submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP):
+def submit_attack(
+    ip: str,
+    user: str,
+    password: str,
+    evidence: str,
+    ATTACKPOD_LOCAL_IP: str,
+    source_port: int | None = None,
+    ssh_client_version: str | None = None,
+    auth_method: str = "password",
+    pubkey_fingerprint: str | None = None,
+    pubkey_algorithm: str | None = None,
+):
     # Check if source or destination is a private/local IP (RFC 1918 filtering)
     allow_private = _check_if_in_test_mode() or get_env("NETWATCH_ALLOW_PRIVATE_IPS", "false").lower() == "true"
     if not allow_private and (is_private_ip(ip) or is_private_ip(ATTACKPOD_LOCAL_IP)):
-        logging.info(f"Skipping attack from/to private IP - Source: {ip}, Destination: {ATTACKPOD_LOCAL_IP}, User: {user}")
+        logging.info(
+            f"Skipping attack from/to private IP - Source: {ip}, Destination: {ATTACKPOD_LOCAL_IP}, User: {user}"
+        )
         return
+
+    metadata: dict[str, Any] = {
+        "username": user,
+        "password": password,
+        "auth_method": auth_method,
+    }
+    if source_port is not None and source_port > 0:
+        metadata["source_port"] = source_port
+    if ssh_client_version:
+        metadata["ssh_client_version"] = ssh_client_version
+    if pubkey_fingerprint:
+        metadata["pubkey_fingerprint"] = pubkey_fingerprint
+    if pubkey_algorithm:
+        metadata["pubkey_algorithm"] = pubkey_algorithm
 
     json_dict = {
         "timestamp": datetime.now().isoformat(),
@@ -147,13 +172,147 @@ def submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP):
         "source_type": "IP",
         "test_mode": _check_if_in_test_mode(),
         "evidence": evidence,
-        "metadata": {
-            "username": user,
-            "password": password,
-        }
+        "metadata": metadata,
     }
 
     enqueue_attack(json_dict)
+
+
+class SshdLogParser:
+    """Stateful parser tracking connection context across OpenSSH sshd[PID] sessions."""
+
+    def __init__(self, max_sessions: int = 2000, session_ttl: float = 300.0):
+        self.sessions: dict[str, dict[str, Any]] = {}
+        self.max_sessions = max_sessions
+        self.session_ttl = session_ttl
+
+    def _prune_stale(self, now: float) -> None:
+        if len(self.sessions) > self.max_sessions:
+            stale_pids = [pid for pid, s in self.sessions.items() if (now - s.get("last_seen", 0.0)) > self.session_ttl]
+            for pid in stale_pids:
+                self.sessions.pop(pid, None)
+            if len(self.sessions) > self.max_sessions:
+                sorted_pids = sorted(self.sessions.keys(), key=lambda p: self.sessions[p].get("last_seen", 0.0))
+                for pid in sorted_pids[: max(1, len(sorted_pids) // 5)]:
+                    self.sessions.pop(pid, None)
+
+    def parse_line(self, line: str) -> list[dict[str, Any]]:
+        now = time.time()
+        self._prune_stale(now)
+        attacks_to_submit: list[dict[str, Any]] = []
+
+        pid_match = re.search(r"sshd\[(\d+)\]:", line)
+        pid = pid_match.group(1) if pid_match else "default"
+
+        if pid not in self.sessions:
+            self.sessions[pid] = {"last_seen": now}
+        session = self.sessions[pid]
+        session["last_seen"] = now
+
+        # Software version banner
+        version_match = re.search(r"client software version (.*)", line)
+        if version_match:
+            session["ssh_client_version"] = version_match.group(1).strip()
+
+        # Source port / IP
+        port_match = re.search(r"from (?:\[?([0-9a-fA-F:.]+)\]? )?port (\d+)", line)
+        if port_match:
+            if port_match.group(1):
+                session["ip"] = port_match.group(1)
+            try:
+                session["source_port"] = int(port_match.group(2))
+            except ValueError:
+                pass
+
+        # Patched debug line: Login attempt by username '...', password '...', from ip '...'
+        login_match = re.findall(r"Login attempt by username '(.*)', password '(.*)', from ip '(\S+)'", line)
+        if login_match:
+            if session.get("pending_attempt"):
+                prev = session["pending_attempt"]
+                attacks_to_submit.append(
+                    {
+                        "ip": prev["ip"],
+                        "user": prev["user"],
+                        "password": prev["password"],
+                        "evidence": prev.get(
+                            "evidence", f"Failed password attempt for {prev['user']} from {prev['ip']}"
+                        ),
+                        "source_port": session.get("source_port"),
+                        "ssh_client_version": session.get("ssh_client_version"),
+                        "auth_method": "password",
+                    }
+                )
+            user, password, ip = login_match[0]
+            session["ip"] = ip
+            session["pending_attempt"] = {"user": user, "password": password, "ip": ip}
+            return attacks_to_submit
+
+        # Official Failed line
+        if "Failed" in line and "publickey" not in line:
+            pending = session.get("pending_attempt")
+            if pending:
+                attacks_to_submit.append(
+                    {
+                        "ip": pending["ip"],
+                        "user": pending["user"],
+                        "password": pending["password"],
+                        "evidence": line.rstrip("\r\n"),
+                        "source_port": session.get("source_port"),
+                        "ssh_client_version": session.get("ssh_client_version"),
+                        "auth_method": "password",
+                    }
+                )
+                session.pop("pending_attempt", None)
+            return attacks_to_submit
+
+        # Failed publickey attempt
+        pk_match = re.search(
+            r"Failed publickey for (?:invalid user )?(\S+) from (\S+) port (\d+) ssh2: (\S+) (SHA256:\S+)",
+            line,
+        )
+        if pk_match:
+            user = pk_match.group(1)
+            ip = pk_match.group(2)
+            port: int | None = None
+            try:
+                port = int(pk_match.group(3))
+            except (ValueError, TypeError):
+                port = session.get("source_port")
+            algo = pk_match.group(4)
+            fp = pk_match.group(5)
+            attacks_to_submit.append(
+                {
+                    "ip": ip,
+                    "user": user,
+                    "password": "",
+                    "evidence": line.rstrip("\r\n"),
+                    "source_port": port,
+                    "ssh_client_version": session.get("ssh_client_version"),
+                    "auth_method": "publickey",
+                    "pubkey_algorithm": algo,
+                    "pubkey_fingerprint": fp,
+                }
+            )
+            return attacks_to_submit
+
+        # Connection teardown
+        if "Connection closed" in line or "Disconnected from" in line or "session closed" in line:
+            if session.get("pending_attempt"):
+                prev = session["pending_attempt"]
+                attacks_to_submit.append(
+                    {
+                        "ip": prev["ip"],
+                        "user": prev["user"],
+                        "password": prev["password"],
+                        "evidence": f"Failed password attempt for {prev['user']} from {prev['ip']}",
+                        "source_port": session.get("source_port"),
+                        "ssh_client_version": session.get("ssh_client_version"),
+                        "auth_method": "password",
+                    }
+                )
+            self.sessions.pop(pid, None)
+
+        return attacks_to_submit
 
 
 def attack_forward_worker(attack_queue):
@@ -172,11 +331,15 @@ def attack_forward_worker(attack_queue):
             if response.status_code == 200:
                 safe_log_json = json.dumps(mask_payload_for_log(json_dict))
                 if _check_if_in_test_mode():
-                    logging.info(f"Reported the following JSON to the NetWatch collector IN TEST MODE ATTACK WILL NOT BE SAVED: {safe_log_json}")
+                    logging.info(
+                        f"Reported the following JSON to the NetWatch collector IN TEST MODE ATTACK WILL NOT BE SAVED: {safe_log_json}"
+                    )
                 else:
                     logging.info(f"Reported the following JSON to the NetWatch collector: {safe_log_json}")
             else:
-                logging.error(f"[!] Got a non 200 status code from the collector: {response.status_code} with message: {response.text}")
+                logging.error(
+                    f"[!] Got a non 200 status code from the collector: {response.status_code} with message: {response.text}"
+                )
 
         except requests.RequestException as e:
             logging.error(f"[!] Got a request exception while submitting the attack: {e}")
@@ -189,7 +352,7 @@ def attack_forward_worker(attack_queue):
             shutdown_event.wait(10)
 
 
-def reap_children(signum, frame):
+def reap_children(_signum, _frame):
     """Async-signal-safe flag setter; actual child reaping is performed outside the signal frame or via Popen.wait."""
     global _child_reap_requested
     _child_reap_requested = True
@@ -210,7 +373,7 @@ def reap_zombie_processes():
         pass
 
 
-def handle_shutdown_signal(signum, frame):
+def handle_shutdown_signal(_signum, _frame):
     """Re-entrant termination handler setting the shutdown event."""
     shutdown_event.set()
 
@@ -239,9 +402,14 @@ def run_sshd():
 
 
 def rotate_sshd_keys():
-    for key_file in ("/etc/ssh/ssh_host_rsa_key", "/etc/ssh/ssh_host_rsa_key.pub",
-                     "/etc/ssh/ssh_host_ecdsa_key", "/etc/ssh/ssh_host_ecdsa_key.pub",
-                     "/etc/ssh/ssh_host_ed25519_key", "/etc/ssh/ssh_host_ed25519_key.pub"):
+    for key_file in (
+        "/etc/ssh/ssh_host_rsa_key",
+        "/etc/ssh/ssh_host_rsa_key.pub",
+        "/etc/ssh/ssh_host_ecdsa_key",
+        "/etc/ssh/ssh_host_ecdsa_key.pub",
+        "/etc/ssh/ssh_host_ed25519_key",
+        "/etc/ssh/ssh_host_ed25519_key.pub",
+    ):
         try:
             if os.path.exists(key_file):
                 os.remove(key_file)
@@ -261,11 +429,12 @@ def rotate_sshd_keys():
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     mode = os.getenv("NETWATCH_MODE", "lowint").lower()
     if mode == "gateway":
         logging.info("[+] Starting NetWatch Attackpod in GATEWAY mode")
         import gateway
+
         gateway.main()
         sys.exit(0)
 
@@ -288,7 +457,7 @@ if __name__ == '__main__':
     else:
         ATTACKPOD_LOCAL_IP = get_local_ip()
 
-    logging.info("[+] Got the local ip of {} for the AttackPod".format(ATTACKPOD_LOCAL_IP))
+    logging.info(f"[+] Got the local ip of {ATTACKPOD_LOCAL_IP} for the AttackPod")
 
     logging.info("[+] Rotating SSHD Keys")
     rotate_sshd_keys()
@@ -301,13 +470,9 @@ if __name__ == '__main__':
     attack_submit_worker_thread = threading.Thread(target=attack_forward_worker, args=(attack_queue,), daemon=True)
     attack_submit_worker_thread.start()
 
-    with open("/var/log/ssh.log", 'r') as logfile:
+    log_parser = SshdLogParser()
+    with open("/var/log/ssh.log") as logfile:
         logfile.seek(0, os.SEEK_END)
-
-        ip = ""
-        user = ""
-        password = ""
-        evidence = ""
 
         while not shutdown_event.is_set():
             reap_zombie_processes()
@@ -319,29 +484,17 @@ if __name__ == '__main__':
                 continue
 
             logging.debug("Captured a new line from sshd: {}".format(redact_sshd_line(line.rstrip("\r\n"))))
-            output = re.findall(r"Login attempt by username '(.*)', password '(.*)', from ip '(\d.*)'", line)
-
-            if len(output) == 1:
-                # if the regex has a match it's the patched debug message
-
-                if ip != "":
-                    # If we have two matches after each other we submit the first one to not miss one, even if we don't have the evidence of the first one
-                    submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP)
-                    ip = ""
-                    user = ""
-                    password = ""
-                    evidence = ""
-
-                user = output[0][0]
-                password = output[0][1]
-                ip = output[0][2]
-            else:
-                # If we don't have a regex match and we have a match of the "ip" in the line it is likely the "official" logline
-                if ip in line and "Failed" in line:
-                    evidence = line.rstrip("\r\n")
-                    submit_attack(ip, user, password, evidence, ATTACKPOD_LOCAL_IP)
-
-                    ip = ""
-                    user = ""
-                    password = ""
-                    evidence = ""
+            attacks = log_parser.parse_line(line)
+            for att in attacks:
+                submit_attack(
+                    ip=att["ip"],
+                    user=att["user"],
+                    password=att["password"],
+                    evidence=att.get("evidence", ""),
+                    ATTACKPOD_LOCAL_IP=ATTACKPOD_LOCAL_IP,
+                    source_port=att.get("source_port"),
+                    ssh_client_version=att.get("ssh_client_version"),
+                    auth_method=att.get("auth_method", "password"),
+                    pubkey_fingerprint=att.get("pubkey_fingerprint"),
+                    pubkey_algorithm=att.get("pubkey_algorithm"),
+                )

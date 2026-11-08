@@ -1,15 +1,14 @@
-import unittest
+import asyncio
 import os
 import sys
-import time
-import asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from admission_engine import AdmissionEngine, AdmissionDecision, AdmissionReason, mask_credential_pair
 import gateway
 import monitor
+from admission_engine import AdmissionDecision, AdmissionEngine, AdmissionReason, mask_credential_pair
 
 
 class TestGatewayAndRelay(unittest.TestCase):
@@ -26,24 +25,26 @@ class TestGatewayAndRelay(unittest.TestCase):
             admission_cooldown_hours=24,
         )
         self.cluster_uuid = "cluster-gw-999"
-        self.engine.load_bundle({
-            "version": "2026-10-17T00:00:00Z",
-            "clusters": {
-                self.cluster_uuid: {
-                    "pairs": {
-                        "pi:raspberryP1!": 5.0,
-                        "ubnt:ubnt2019": 5.0,
-                        "support:sup@rt#": 5.0,
+        self.engine.load_bundle(
+            {
+                "version": "2026-10-17T00:00:00Z",
+                "clusters": {
+                    self.cluster_uuid: {
+                        "pairs": {
+                            "pi:raspberryP1!": 5.0,
+                            "ubnt:ubnt2019": 5.0,
+                            "support:sup@rt#": 5.0,
+                        }
                     }
-                }
-            },
-            "params": {
-                "window_seconds": 180,
-                "min_distinct_pairs": 3,
-                "min_score": 12.0,
-                "admission_probability": 1.0,
+                },
+                "params": {
+                    "window_seconds": 180,
+                    "min_distinct_pairs": 3,
+                    "min_score": 12.0,
+                    "admission_probability": 1.0,
+                },
             }
-        })
+        )
 
     def tearDown(self):
         self.engine.close()
@@ -88,14 +89,16 @@ class TestGatewayAndRelay(unittest.TestCase):
     def test_sync_accepted_credentials_replaces_stale_entries(self):
         """Verify sync_accepted_credentials_list replaces local cache cleanly."""
         self.engine.add_accepted_credential("old_user", "old_pass")
-        self.engine.sync_accepted_credentials_list([
-            {
-                "username": "synced_user",
-                "password": "synced_pass",
-                "origin_attackgroup_uuid": "ag-1",
-                "origin_attackcluster_uuid": "ac-1",
-            }
-        ])
+        self.engine.sync_accepted_credentials_list(
+            [
+                {
+                    "username": "synced_user",
+                    "password": "synced_pass",
+                    "origin_attackgroup_uuid": "ag-1",
+                    "origin_attackcluster_uuid": "ac-1",
+                }
+            ]
+        )
         active = self.engine.get_active_accepted_credentials()
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0]["username"], "synced_user")
@@ -161,6 +164,7 @@ class TestGatewayAndRelay(unittest.TestCase):
 
     def test_cowrie_relay_session_interactive_and_cleanup(self):
         """Test CowrieRelaySession relays stdout/stderr/stdin and cleans up connections properly."""
+
         async def run_test():
             srv = gateway.GatewaySSHServer(self.engine, "203.0.113.10")
             srv.admitted_engagement_uuid = "eng-123"
@@ -208,6 +212,7 @@ class TestGatewayAndRelay(unittest.TestCase):
 
     def test_cowrie_relay_session_enforces_idle_timeout(self):
         """Test CowrieRelaySession terminates idle sessions exceeding idle_timeout_seconds."""
+
         async def run_test():
             srv = gateway.GatewaySSHServer(self.engine, "203.0.113.10")
             srv.admitted_engagement_uuid = "eng-idle"
@@ -261,12 +266,126 @@ class TestGatewayAndRelay(unittest.TestCase):
         self.assertIn("password '***'", redacted)
 
         import queue as q_mod
+
         small_q = q_mod.Queue(maxsize=2)
         monitor.enqueue_attack({"id": 1}, small_q)
         monitor.enqueue_attack({"id": 2}, small_q)
         monitor.enqueue_attack({"id": 3}, small_q)
         items = [small_q.get_nowait(), small_q.get_nowait()]
         self.assertEqual([i["id"] for i in items], [2, 3])
+
+    def test_compute_hassh_from_connection(self):
+        """Verify HASSH computation from mock connection packet and direct attributes."""
+        mock_conn = MagicMock()
+        mock_conn.hassh = "d41d8cd98f00b204e9800998ecf8427e"
+        mock_conn.hassh_algorithms = "kex;enc;mac;cmp"
+        mock_conn._client_kexinit = None
+
+        h, algs = gateway.compute_hassh_from_connection(mock_conn)
+        self.assertEqual(h, "d41d8cd98f00b204e9800998ecf8427e")
+        self.assertEqual(algs, "kex;enc;mac;cmp")
+
+    @patch("gateway.requests.post")
+    def test_validate_public_key_probe_reported_and_rejected(self, mock_post):
+        """Verify validate_public_key logs probe with pubkey metadata and always rejects (returns False)."""
+        srv = gateway.GatewaySSHServer(self.engine, "203.0.113.10")
+        mock_conn = MagicMock()
+        mock_conn.get_extra_info.side_effect = lambda key, default=None: {
+            "peername": ("198.51.100.99", 43210),
+            "client_version": "SSH-2.0-OpenSSH_9.0",
+        }.get(key, default)
+        mock_conn.hassh = "abc123hassh"
+        mock_conn.hassh_algorithms = "kex;enc;mac;cmp"
+        mock_conn._client_kexinit = None
+        srv.connection_made(mock_conn)
+
+        mock_key = MagicMock()
+        mock_key.get_algorithm.return_value = "ssh-ed25519"
+        mock_key.get_fingerprint.return_value = "SHA256:testfingerprint123"
+        mock_key.get_comment.return_value = "attacker@box"
+
+        res = srv.validate_public_key("root", mock_key)
+        self.assertFalse(res)
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        self.assertIn("/v2/add_attack/ssh_bruteforce", args[0])
+        payload = kwargs["json"]
+        self.assertEqual(payload["source"], "198.51.100.99")
+        self.assertEqual(payload["metadata"]["auth_method"], "publickey")
+        self.assertEqual(payload["metadata"]["pubkey_algorithm"], "ssh-ed25519")
+        self.assertEqual(payload["metadata"]["pubkey_fingerprint"], "SHA256:testfingerprint123")
+        self.assertEqual(payload["metadata"]["pubkey_comment"], "attacker@box")
+        self.assertEqual(payload["metadata"]["source_port"], 43210)
+        self.assertEqual(payload["metadata"]["attempt_index_in_conn"], 1)
+
+    @patch("gateway.requests.post")
+    def test_gateway_password_rejection_cadence_and_metadata(self, mock_post):
+        """Verify password rejection includes source_port, hassh, attempt index, and cadence."""
+        srv = gateway.GatewaySSHServer(self.engine, "203.0.113.10")
+        mock_conn = MagicMock()
+        mock_conn.get_extra_info.side_effect = lambda key, default=None: {
+            "peername": ("198.51.100.77", 55555),
+            "client_version": "SSH-2.0-Go",
+        }.get(key, default)
+        mock_conn.hassh = "hassh-go-scanner"
+        mock_conn.hassh_algorithms = "kex;enc;mac;cmp"
+        mock_conn._client_kexinit = None
+        srv.connection_made(mock_conn)
+
+        srv.validate_password("admin", "admin123")
+        self.assertEqual(mock_post.call_count, 1)
+        meta = mock_post.call_args[1]["json"]["metadata"]
+        self.assertEqual(meta["username"], "admin")
+        self.assertEqual(meta["password"], "admin123")
+        self.assertEqual(meta["source_port"], 55555)
+        self.assertEqual(meta["ssh_client_version"], "SSH-2.0-Go")
+        self.assertEqual(meta["hassh"], "hassh-go-scanner")
+        self.assertEqual(meta["attempt_index_in_conn"], 1)
+
+        # Second attempt
+        srv.validate_password("admin", "admin456")
+        self.assertEqual(mock_post.call_count, 2)
+        meta2 = mock_post.call_args[1]["json"]["metadata"]
+        self.assertEqual(meta2["attempt_index_in_conn"], 2)
+        self.assertIn("inter_attempt_ms", meta2)
+
+    def test_sshd_log_parser_multi_pid_and_pubkey(self):
+        """Verify SshdLogParser handles banner, port, password attempt, and publickey failure across PIDs."""
+        parser = monitor.SshdLogParser()
+
+        # PID 100 connects
+        parser.parse_line("sshd[100]: Connection from 198.51.100.22 port 51234 on 10.0.0.1 port 22")
+        parser.parse_line("sshd[100]: Client protocol version 2.0; client software version OpenSSH_8.9p1")
+
+        # Patched debug line arrives
+        attacks = parser.parse_line(
+            "sshd[100]: Login attempt by username 'admin', password 'pass1', from ip '198.51.100.22'"
+        )
+        self.assertEqual(len(attacks), 0)  # Pending
+
+        # Failed line arrives
+        attacks = parser.parse_line("sshd[100]: Failed password for admin from 198.51.100.22 port 51234 ssh2")
+        self.assertEqual(len(attacks), 1)
+        att = attacks[0]
+        self.assertEqual(att["user"], "admin")
+        self.assertEqual(att["password"], "pass1")
+        self.assertEqual(att["source_port"], 51234)
+        self.assertEqual(att["ssh_client_version"], "OpenSSH_8.9p1")
+        self.assertEqual(att["auth_method"], "password")
+
+        # PID 200 probes public key
+        pk_line = (
+            "sshd[200]: Failed publickey for invalid user git from 198.51.100.33 port 44332 ssh2: RSA SHA256:abcdkey123"
+        )
+        pk_attacks = parser.parse_line(pk_line)
+        self.assertEqual(len(pk_attacks), 1)
+        pk_att = pk_attacks[0]
+        self.assertEqual(pk_att["user"], "git")
+        self.assertEqual(pk_att["ip"], "198.51.100.33")
+        self.assertEqual(pk_att["source_port"], 44332)
+        self.assertEqual(pk_att["auth_method"], "publickey")
+        self.assertEqual(pk_att["pubkey_algorithm"], "RSA")
+        self.assertEqual(pk_att["pubkey_fingerprint"], "SHA256:abcdkey123")
 
 
 if __name__ == "__main__":
