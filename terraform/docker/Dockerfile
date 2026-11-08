@@ -5,7 +5,7 @@ FROM ubuntu:24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Enable 'deb-src' entries dynamically for all architectures, install build dependencies, and compile patched OpenSSH
-# hadolint ignore=DL3008,DL3009
+# hadolint ignore=DL3008,DL3009,DL3003
 RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true && \
     apt-get update && \
     apt-get upgrade -y && \
