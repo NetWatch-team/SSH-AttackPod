@@ -1,5 +1,5 @@
 # Stage 1: Build stage
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 # Set environment variable for non-interactive installations
 ENV DEBIAN_FRONTEND=noninteractive
@@ -40,7 +40,7 @@ RUN python3 -m venv /opt/venv && \
     find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # Stage 2: Sleek, hardened runtime stage
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 # Set environment variable for non-interactive installations
 ENV DEBIAN_FRONTEND=noninteractive
