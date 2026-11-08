@@ -211,7 +211,7 @@ def report_bruteforce_attack(
         else:
             evidence = f"Failed password attempt for {user} from {src_ip}"
 
-    payload = {
+    payload: dict[str, Any] = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "uuid": SENSOR_UUID,
         "tlp": SENSOR_TLP,
