@@ -1,0 +1,88 @@
+name: NetWatch CI/CD Pipeline (SSH-AttackPod)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY_IMAGE: docker.netwatch.team/netwatch_ssh-attackpod
+  BUILD_CONTEXT: src
+  DOCKERFILE_PATH: src/Dockerfile
+  SRC_DIR: src
+  TESTS_DIR: tests
+  REQUIREMENTS_FILE: src/requirements.txt
+
+jobs:
+  quality-gate:
+    name: "Gate 1: Clean Code, Complexity, Dead Code & Types"
+    runs-on: [self-hosted, netwatch-core]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clean Code & Complexity Check (Ruff Lint)
+        run: ruff check ${{ env.SRC_DIR }} ${{ env.TESTS_DIR }}
+      - name: Code Formatting Check (Ruff Format)
+        run: ruff format --check ${{ env.SRC_DIR }} ${{ env.TESTS_DIR }}
+      - name: Dead Code Check (Vulture)
+        run: vulture ${{ env.SRC_DIR }} --min-confidence 80
+      - name: Static Type Check (Mypy)
+        run: mypy ${{ env.SRC_DIR }}
+      - name: Dockerfile Best Practices Lint (Hadolint)
+        run: hadolint --failure-threshold warning ${{ env.DOCKERFILE_PATH }}
+
+  security-gate:
+    name: "Gate 2: Secret Scan, SAST & Dependency Audit"
+    runs-on: [self-hosted, netwatch-core]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Hardcoded Secrets & Key Scan (Gitleaks)
+        run: gitleaks detect --source . --no-banner --redact --verbose
+      - name: Python SAST Security Scan (Bandit)
+        run: bandit -r ${{ env.SRC_DIR }} -ll -ii
+      - name: Dependency Vulnerability Audit (pip-audit)
+        run: pip-audit -r ${{ env.REQUIREMENTS_FILE }} --strict --desc
+
+  test-gate:
+    name: "Gate 3: Unit Tests"
+    runs-on: [self-hosted, netwatch-core]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute Unit Tests in Isolated Venv
+        run: |
+          python3 -m venv .ci-venv
+          .ci-venv/bin/pip install --upgrade pip
+          .ci-venv/bin/pip install -r ${{ env.REQUIREMENTS_FILE }} -r tests/requirements.txt pytest pytest-cov
+          PYTHONPATH=${{ env.SRC_DIR }} .ci-venv/bin/pytest ${{ env.TESTS_DIR }} --ignore=tests/test_image.py -v
+
+  build-scan-and-push:
+    name: "Gate 4: Container Build, Trivy Scan & Push to Registry"
+    needs: [quality-gate, security-gate, test-gate]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, netwatch-core]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Immutable Container Image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY_IMAGE }}:${{ github.sha }} \
+            -t ${{ env.REGISTRY_IMAGE }}:prod \
+            -t ${{ env.REGISTRY_IMAGE }}:latest \
+            -f ${{ env.DOCKERFILE_PATH }} \
+            ${{ env.BUILD_CONTEXT }}
+      - name: Container OS & Package Vulnerability Scan (Trivy)
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity CRITICAL,HIGH \
+            --no-progress \
+            ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
+      - name: Push Verified Image to Private Registry (docker.netwatch.team)
+        run: |
+          docker push ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY_IMAGE }}:prod
+          docker push ${{ env.REGISTRY_IMAGE }}:latest
