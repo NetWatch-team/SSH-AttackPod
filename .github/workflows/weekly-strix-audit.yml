@@ -17,6 +17,8 @@ jobs:
   weekly-strix-audit:
     name: "Weekly Strix AI Penetration & Vulnerability Audit"
     runs-on: [self-hosted, netwatch-core]
+    # Jobs queue on an on-server flock (one scan at a time); allow long waits + CPU inference
+    timeout-minutes: 1440
     concurrency:
       group: strix-audit-${{ github.repository }}
       cancel-in-progress: false
