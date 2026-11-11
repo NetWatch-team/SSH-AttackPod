@@ -1,0 +1,40 @@
+name: Weekly Strix AI Security Audit (SSH-AttackPod)
+
+on:
+  schedule:
+    # Off-hours execution: Every Sunday at 01:00 UTC (02:00 CET / 03:00 CEST)
+    - cron: '0 1 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  REPO_NAME: "SSH-AttackPod"
+
+jobs:
+  weekly-strix-audit:
+    name: "Weekly Strix AI Penetration & Vulnerability Audit"
+    runs-on: [self-hosted, netwatch-core]
+    concurrency:
+      group: strix-audit-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Run Strix AI Security Audit & Update GitHub Issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: /opt/netwatch/cicd/run_strix_audit.sh
+
+      - name: Archive Strix Security Report & Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strix-security-audit-report-SSH-AttackPod
+          path: |
+            strix-audit-report.md
+            strix_runs/
+          retention-days: 30
