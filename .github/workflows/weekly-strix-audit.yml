@@ -2,8 +2,8 @@ name: Weekly Strix AI Security Audit (SSH-AttackPod)
 
 on:
   schedule:
-    # Off-hours execution: Every Sunday at 01:00 UTC (02:00 CET / 03:00 CEST)
-    - cron: '0 1 * * 0'
+    # Off-hours, spread over the week: Sat 04:00 UTC
+    - cron: '0 4 * * 6'
   workflow_dispatch:
 
 permissions:
