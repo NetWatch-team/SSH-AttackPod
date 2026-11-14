@@ -5,6 +5,12 @@ on:
     # Off-hours, spread over the week: Sat 04:00 UTC
     - cron: '0 4 * * 6'
   workflow_dispatch:
+    inputs:
+      max_turns:
+        description: 'Override max turns (leave blank for automatic dynamic calculation based on codebase size)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -29,6 +35,7 @@ jobs:
       - name: Run Strix AI Security Audit & Update GitHub Issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STRIX_MAX_TURNS: ${{ inputs.max_turns }}
         run: /opt/netwatch/cicd/run_strix_audit.sh
 
       - name: Archive Strix Security Report & Artifacts
