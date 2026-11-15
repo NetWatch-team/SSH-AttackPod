@@ -17,7 +17,7 @@ concurrency:
 jobs:
   antigravity-verify:
     name: "Antigravity Code & Security Verification"
-    runs-on: [self-hosted, netwatch-core-worker]
+    runs-on: [self-hosted, netwatch-core-ai-worker]
     timeout-minutes: 20
     steps:
       - name: Checkout PR Code
