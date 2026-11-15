@@ -1,0 +1,30 @@
+name: Antigravity PR Verification
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: antigravity-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  antigravity-verify:
+    name: "Antigravity Code & Security Verification"
+    runs-on: [self-hosted, netwatch-core-worker]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR Code
+        uses: actions/checkout@v4
+
+      - name: Run Antigravity PR Verification
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: /opt/netwatch/cicd/issue-solver/run_antigravity_review.sh
