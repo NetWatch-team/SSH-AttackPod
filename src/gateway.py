@@ -607,7 +607,8 @@ class GatewaySSHServer(asyncssh.SSHServer):
         # 3. Request relay token from Honeypot Farm Broker
         try:
             broker_resp = requests.post(
-                f"{FARM_BROKER_URL}/broker/v1/sessions",
+                # Intentional HTTP-only endpoint over internal WireGuard tunnel to Honeypot Farm Broker
+                f"{FARM_BROKER_URL}/broker/v1/sessions",  # nosemgrep
                 json={
                     "engagement_uuid": eng_uuid,
                     "sensor_uuid": SENSOR_UUID,
